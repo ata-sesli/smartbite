@@ -1,0 +1,111 @@
+:root {
+  color-scheme: light;
+  --bg: #f4f7f9;
+  --panel: #ffffff;
+  --text: #0f1720;
+  --muted: #5b6672;
+  --line: #d6dde5;
+  --accent: #0b7a5b;
+  --danger: #b42318;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: 'IBM Plex Sans', 'Segoe UI', sans-serif;
+  background: radial-gradient(circle at top right, #dfeee9 0%, var(--bg) 45%);
+  color: var(--text);
+}
+
+main {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 1rem;
+}
+
+section {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+
+h1,
+h2 {
+  margin: 0 0 0.75rem;
+}
+
+p {
+  margin: 0.5rem 0;
+  color: var(--muted);
+}
+
+label {
+  display: block;
+  font-size: 0.92rem;
+  margin-bottom: 0.4rem;
+}
+
+input,
+textarea,
+select,
+button {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.6rem 0.7rem;
+  font: inherit;
+}
+
+textarea {
+  min-height: 96px;
+}
+
+button {
+  background: var(--accent);
+  color: white;
+  border: 0;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+button.secondary {
+  background: #243447;
+}
+
+button.danger {
+  background: var(--danger);
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.grid {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.grid.two {
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}
+
+pre {
+  margin: 0.5rem 0 0;
+  background: #111827;
+  color: #e6edf3;
+  border-radius: 8px;
+  padding: 0.75rem;
+  overflow: auto;
+  font-size: 0.85rem;
+}
+
+.small {
+  font-size: 0.84rem;
+  color: var(--muted);
+}

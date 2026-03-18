@@ -1,0 +1,51 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: smartbite
+      POSTGRES_USER: smartbite
+      POSTGRES_PASSWORD: smartbite
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  api:
+    build: .
+    command: smartbite-api
+    environment:
+      SMARTBITE_DATABASE_URL: postgresql+asyncpg://smartbite:smartbite@postgres:5432/smartbite
+      SMARTBITE_REDIS_URL: redis://redis:6379/0
+      SMARTBITE_STORAGE_ROOT: /app/data/storage
+      SMARTBITE_OCR_DEVICE_MODE: auto
+    volumes:
+      - .:/app
+    depends_on:
+      - postgres
+      - redis
+    ports:
+      - "8000:8000"
+
+  worker:
+    build: .
+    command: smartbite-worker
+    profiles:
+      - docker-worker
+    environment:
+      SMARTBITE_DATABASE_URL: postgresql+asyncpg://smartbite:smartbite@postgres:5432/smartbite
+      SMARTBITE_REDIS_URL: redis://redis:6379/0
+      SMARTBITE_STORAGE_ROOT: /app/data/storage
+      SMARTBITE_OCR_DEVICE_MODE: auto
+    volumes:
+      - .:/app
+    depends_on:
+      - postgres
+      - redis
+
+volumes:
+  postgres_data:
