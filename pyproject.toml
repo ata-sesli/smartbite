@@ -27,7 +27,6 @@ dependencies = [
 
 [project.optional-dependencies]
 ai = [
-  "onnxruntime>=1.18.1",
   "paddleocr>=2.8.1",
   "ultralytics>=8.2.0",
   "torch>=2.3.1",
@@ -41,6 +40,12 @@ dev = [
 [project.scripts]
 smartbite-api = "app.main:run"
 smartbite-worker = "app.worker_main:run"
+smartbite-finetune-ppocrv5-rec = "app.scripts.finetune_ppocrv5_rec:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+exclude = ["alembic*", "web*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

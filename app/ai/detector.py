@@ -14,16 +14,33 @@ class ExpiryRegionDetector:
         self._model = None
         self._load_error: str | None = None
 
+    def _resolve_model_source(self) -> str | None:
+        ref = str(self.model_path).strip()
+        if not ref:
+            self._load_error = "detector model path is empty"
+            return None
+
+        candidate = Path(ref)
+        if candidate.exists():
+            return str(candidate)
+
+        # Ultralytics supports named model refs (for example: yolo26n.pt) and can
+        # auto-download them. We allow that when the ref is not an explicit filepath.
+        if candidate.is_absolute() or "/" in ref or "\\" in ref:
+            self._load_error = f"detector model not found: {candidate}"
+            return None
+        return ref
+
     def _ensure_model(self) -> None:
         if self._model is not None or self._load_error is not None:
             return
-        if not self.model_path.exists():
-            self._load_error = f"detector model not found: {self.model_path}"
+        model_source = self._resolve_model_source()
+        if model_source is None:
             return
         try:
             from ultralytics import YOLO
 
-            self._model = YOLO(str(self.model_path))
+            self._model = YOLO(model_source)
         except Exception as exc:  # pragma: no cover - depends on optional runtime
             self._load_error = f"failed to load detector model: {exc}"
 

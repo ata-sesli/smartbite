@@ -26,10 +26,14 @@ def build_pipeline(settings: Settings) -> ExpiryPipeline:
     preprocessor = ROIImagePreprocessor()
     ocr_router = OCRRouter(
         OCRConfig(
-            onnx_model_path=settings.ocr_onnx_model_path,
-            onnx_charset_path=settings.ocr_onnx_charset_path,
+            ppocrv5_main_model_dir=settings.ocr_ppocrv5_main_model_dir,
+            ppocrv5_main_char_dict_path=settings.ocr_ppocrv5_main_char_dict_path,
             paddle_lang=settings.ocr_paddle_lang,
             device_mode=settings.ocr_device_mode,
+            ppocrv5_use_angle_cls=settings.ocr_ppocrv5_use_angle_cls,
+            ppocrv5_det_db_thresh=settings.ocr_ppocrv5_det_db_thresh,
+            substitute_config_path=settings.ocr_substitute_config_path,
+            enable_substitute_model=settings.ocr_enable_substitute_model,
         )
     )
     parser = ExpiryDateParser()

@@ -1,32 +1,23 @@
-# SmartBite V1 Backend
+# SmartBite V1
 
-Backend service for expiry-date scan ingestion and async AI processing.
+SmartBite is an expiry-date scanning backend with async AI processing, plus a minimal SvelteKit web console.
 
-## Stack
-- Litestar API
-- PostgreSQL + SQLAlchemy + Alembic
-- Redis + arq worker
-- YOLO detector + device-aware OCR routing
+## Current status
+- Backend API: Litestar
+- Database: PostgreSQL with SQLAlchemy + Alembic
+- Queue/worker: Redis + `arq`
+- Detection: Ultralytics YOLO adapter (default model: `yolo26n.pt`)
+- OCR runtime: PP-OCRv5-first (`ppocrv5_main`)
+- Web: SvelteKit + TypeScript (PNPM)
 
-## Device-aware OCR routing
-- `cpu` runtime: ONNX lite OCR model (`SMARTBITE_OCR_ONNX_MODEL_PATH`)
-- `mps` or `cuda` runtime: full PaddleOCR
-- routing selected by `SMARTBITE_OCR_DEVICE_MODE=auto|cpu|mps|cuda`
+## OCR runtime behavior
+- Active default on all devices (`cpu|mps|cuda`): `ppocrv5_main`
+- Device selection env: `SMARTBITE_OCR_DEVICE_MODE=auto|cpu|mps|cuda`
+- Substitute model metadata lives in `app/ai/ocr_substitute_config.json`
+- Substitute model is disabled by default (`SMARTBITE_OCR_ENABLE_SUBSTITUTE_MODEL=false`)
+- No silent fallback: missing model/config surfaces explicit failure reasons
 
-## Quick start
-1. Copy `.env.example` to `.env` and adjust values.
-2. Start infrastructure:
-   - `docker compose up -d postgres redis`
-3. Install package:
-   - `pip install -e .[dev]`
-4. Run migrations:
-   - `alembic upgrade head`
-5. Start API:
-   - `smartbite-api`
-6. Start worker:
-   - `smartbite-worker`
-
-## Endpoints
+## API endpoints
 - `POST /scans`
 - `GET /scans/{scan_id}`
 - `PATCH /scans/{scan_id}`
@@ -35,32 +26,57 @@ Backend service for expiry-date scan ingestion and async AI processing.
 - `GET /health`
 - `GET /admin/metrics`
 
-## Running all services with Docker
-- `docker compose --profile docker-worker up --build`
+## Quick start (hybrid recommended)
+Hybrid means Docker for infra/API and native host worker for AI.
 
-## Hybrid runtime (recommended for native AI)
-1. Start non-AI services in Docker:
+1. Create env file:
+   - `cp .env.example .env`
+2. Install backend package:
+   - `pip install -e .[dev]`
+3. Start infrastructure + API:
    - `docker compose up -d postgres redis api`
-2. In a host shell (macOS/Windows), run the worker natively:
-   - macOS/Linux:
-     - `export SMARTBITE_DATABASE_URL=postgresql+asyncpg://smartbite:smartbite@localhost:5432/smartbite`
-     - `export SMARTBITE_REDIS_URL=redis://localhost:6379/0`
-     - `export SMARTBITE_STORAGE_ROOT=<absolute-path-to-repo>/data/storage`
-     - `export SMARTBITE_OCR_DEVICE_MODE=auto`
-     - `smartbite-worker`
-   - Windows PowerShell:
-     - `$env:SMARTBITE_DATABASE_URL='postgresql+asyncpg://smartbite:smartbite@localhost:5432/smartbite'`
-     - `$env:SMARTBITE_REDIS_URL='redis://localhost:6379/0'`
-     - `$env:SMARTBITE_STORAGE_ROOT='C:\\path\\to\\smartbite\\data\\storage'`
-     - `$env:SMARTBITE_OCR_DEVICE_MODE='auto'`
-     - `smartbite-worker`
+4. Run migrations:
+   - `alembic upgrade head`
+5. Start worker natively:
+   - `smartbite-worker`
 
 Notes:
-- `SMARTBITE_STORAGE_ROOT` must point to the same host directory used by the Docker API bind mount.
-- To run worker in Docker instead, enable the profile: `docker compose --profile docker-worker up -d worker`.
+- Default published API port is `8001` (`SMARTBITE_API_PORT=8001`).
+- `SMARTBITE_STORAGE_ROOT` in `.env` must match the same host folder that Docker bind-mounts (`data/storage` by default).
 
-## Minimal SvelteKit web console
-- `cd web`
-- `pnpm install`
-- `pnpm dev`
-- Set backend target: `SMARTBITE_BACKEND_URL=http://localhost:8000`
+## Full Docker mode
+Run API + worker in Docker:
+
+- `docker compose --profile docker-worker up --build`
+
+## Web console (PNPM only)
+1. Create frontend env:
+   - `cp web/.env.example web/.env`
+2. Start web app:
+   - `cd web`
+   - `pnpm install`
+   - `pnpm sync`
+   - `pnpm check`
+   - `pnpm dev`
+
+Default backend target in `web/.env.example` is `http://localhost:8001`.
+
+## Fine-tuning PP-OCRv5 recognition
+CLI script:
+- `app/scripts/finetune_ppocrv5_rec.py`
+- Entry point: `smartbite-finetune-ppocrv5-rec`
+
+Notebook:
+- `notebooks/ppocrv5_finetune_rec.ipynb`
+
+Expected dataset layout:
+- `train_images/`
+- `val_images/`
+- `train_label.txt`
+- `val_label.txt`
+
+Each label line format:
+- `relative/image/path.jpg<TAB>text label`
+
+## More commands
+For explicit operational commands and troubleshooting, see `COMMANDS.md`.

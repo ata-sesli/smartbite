@@ -25,10 +25,14 @@ class Settings(BaseSettings):
     alert_threshold_days: int = 3
     scan_retry_count: int = 3
 
-    detector_model_path: Path = Path("models/detector.pt")
-    ocr_onnx_model_path: Path = Path("models/ocr_lite.onnx")
-    ocr_onnx_charset_path: Path | None = Path("models/ocr_charset.txt")
+    detector_model_path: Path = Path("yolo26n.pt")
+    ocr_ppocrv5_main_model_dir: Path = Path("models/ppocrv5/main")
+    ocr_ppocrv5_main_char_dict_path: Path | None = Path("models/ppocrv5/char_dict.txt")
+    ocr_ppocrv5_use_angle_cls: bool = True
+    ocr_ppocrv5_det_db_thresh: float = 0.3
     ocr_paddle_lang: str = "en"
+    ocr_substitute_config_path: Path = Path("app/ai/ocr_substitute_config.json")
+    ocr_enable_substitute_model: bool = False
 
     # auto | cpu | mps | cuda
     ocr_device_mode: str = "auto"

@@ -29,7 +29,7 @@ services:
       - postgres
       - redis
     ports:
-      - "8000:8000"
+      - "${SMARTBITE_API_PORT:-8001}:8000"
 
   worker:
     build: .

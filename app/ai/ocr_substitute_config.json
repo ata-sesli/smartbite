@@ -1,0 +1,8 @@
+{
+  "engine_name": "ppocrv5_substitute",
+  "model_dir": "models/ppocrv5/substitute",
+  "char_dict_path": "models/ppocrv5/char_dict.txt",
+  "use_angle_cls": true,
+  "det_db_thresh": 0.3,
+  "notes": "Substitute model metadata. Default runtime keeps this disabled unless SMARTBITE_OCR_ENABLE_SUBSTITUTE_MODEL=true"
+}

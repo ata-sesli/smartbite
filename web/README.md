@@ -13,10 +13,10 @@ The app proxies these backend endpoints through SvelteKit server routes:
 - `GET /admin/metrics`
 
 ## Configuration
-Set backend URL for proxying:
+Set backend URL for proxying once:
 
 ```bash
-export SMARTBITE_BACKEND_URL=http://localhost:8000
+cp .env.example .env
 ```
 
 ## Run
