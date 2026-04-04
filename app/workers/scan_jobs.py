@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import importlib
 import logging
+import os
 from datetime import date
 from uuid import UUID
 
@@ -21,6 +23,52 @@ from app.infra.storage import LocalStorage
 logger = logging.getLogger(__name__)
 
 
+def _assert_worker_ai_dependencies() -> None:
+    os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "True"
+    required_modules = ("ultralytics", "paddle", "paddleocr")
+    missing: list[str] = []
+
+    for module_name in required_modules:
+        try:
+            importlib.import_module(module_name)
+        except Exception as exc:  # pragma: no cover - import environment specific
+            missing.append(f"{module_name} ({exc})")
+
+    if missing:
+        raise RuntimeError(
+            "worker AI dependencies are missing. "
+            "Run `uv sync --extra ai` (preferred) or `pip install -e '.[ai]'` before starting smartbite-worker. "
+            f"Missing modules: {', '.join(missing)}"
+        )
+
+
+def _log_recognition_dict_alignment(settings: Settings) -> None:
+    inference_yml = settings.ocr_ppocrv5_main_model_dir / "inference.yml"
+    char_dict = settings.ocr_ppocrv5_main_char_dict_path
+    if not inference_yml.exists() or char_dict is None or not char_dict.exists():
+        return
+
+    try:
+        import yaml
+
+        payload = yaml.safe_load(inference_yml.read_text()) or {}
+        embedded_dict = payload.get("PostProcess", {}).get("character_dict")
+        if not isinstance(embedded_dict, list):
+            return
+        file_dict = [line.rstrip("\n") for line in char_dict.read_text().splitlines()]
+        if embedded_dict == file_dict:
+            logger.info("OCR dict alignment OK: embedded inference dict matches %s", char_dict)
+        else:
+            logger.warning(
+                "OCR dict mismatch: embedded inference dict differs from %s (embedded=%s file=%s)",
+                char_dict,
+                len(embedded_dict),
+                len(file_dict),
+            )
+    except Exception as exc:
+        logger.warning("Could not validate OCR dict alignment: %s", exc)
+
+
 def build_pipeline(settings: Settings) -> ExpiryPipeline:
     detector = ExpiryRegionDetector(settings.detector_model_path)
     preprocessor = ROIImagePreprocessor()
@@ -32,6 +80,7 @@ def build_pipeline(settings: Settings) -> ExpiryPipeline:
             device_mode=settings.ocr_device_mode,
             ppocrv5_use_angle_cls=settings.ocr_ppocrv5_use_angle_cls,
             ppocrv5_det_db_thresh=settings.ocr_ppocrv5_det_db_thresh,
+            ppocrv5_det_db_box_thresh=settings.ocr_ppocrv5_det_db_box_thresh,
             substitute_config_path=settings.ocr_substitute_config_path,
             enable_substitute_model=settings.ocr_enable_substitute_model,
         )
@@ -42,7 +91,18 @@ def build_pipeline(settings: Settings) -> ExpiryPipeline:
 
 
 async def startup(ctx: dict) -> None:
+    _assert_worker_ai_dependencies()
     settings = get_settings()
+    _log_recognition_dict_alignment(settings)
+    logger.info(
+        "OCR startup config: main_model_dir=%s char_dict=%s device_mode=%s det_thresh=%s box_thresh=%s substitute_enabled=%s",
+        settings.ocr_ppocrv5_main_model_dir,
+        settings.ocr_ppocrv5_main_char_dict_path,
+        settings.ocr_device_mode,
+        settings.ocr_ppocrv5_det_db_thresh,
+        settings.ocr_ppocrv5_det_db_box_thresh,
+        settings.ocr_enable_substitute_model,
+    )
     ctx["settings"] = settings
     ctx["storage"] = LocalStorage(settings.storage_root)
     ctx["pipeline"] = build_pipeline(settings)

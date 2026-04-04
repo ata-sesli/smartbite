@@ -28,3 +28,19 @@ def test_parser_rejects_unparseable_text() -> None:
 
     assert result.parsed_date is None
     assert result.reason == "no valid date parsed"
+
+
+def test_parser_rejects_implausible_old_year() -> None:
+    parser = ExpiryDateParser()
+    result = parser.parse("EXP 01/01/2010", reference_date=date(2026, 4, 4))
+
+    assert result.parsed_date is None
+    assert result.reason == "no valid date parsed"
+
+
+def test_parser_accepts_recent_expired_date_within_window() -> None:
+    parser = ExpiryDateParser()
+    result = parser.parse("SNTT 25/11/21", reference_date=date(2026, 4, 4))
+
+    assert result.parsed_date == date(2021, 11, 25)
+    assert result.date_format_detected == "DD/MM/YY"

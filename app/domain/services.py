@@ -176,6 +176,9 @@ class ScanService:
         if extension not in self.accepted_file_extensions:
             raise ValidationError("unsupported file extension")
 
+    def validate_upload(self, *, image_bytes: bytes, filename: str, content_type: str) -> None:
+        self._validate_file(image_bytes=image_bytes, filename=filename, content_type=content_type)
+
     def _sanitize_metadata(self, metadata: dict[str, Any] | None) -> dict[str, Any] | None:
         if metadata is None:
             return None
@@ -202,6 +205,9 @@ class ScanService:
         if not isinstance(sanitized, dict):
             raise ValidationError("metadata must be a JSON object")
         return sanitized
+
+    def sanitize_metadata(self, metadata: dict[str, Any] | None) -> dict[str, Any] | None:
+        return self._sanitize_metadata(metadata)
 
 
 class AlertService:

@@ -70,6 +70,9 @@ class ExpiryPipeline:
         detection: DetectionResult = self.detector.detect(image)
         timings["detect"] = int((perf_counter() - t1) * 1000)
         if not detection.detected or detection.best_box is None:
+            fallback = self._run_full_image_fallback(image=image, today=today, timings=timings, reason_prefix="detector_fallback")
+            if fallback is not None:
+                return fallback
             return self._failed(
                 final_status=FinalResultStatus.DETECTOR_FAILED,
                 reason=detection.reason or "no expiry region detected",
@@ -87,11 +90,15 @@ class ExpiryPipeline:
             )
 
         t2 = perf_counter()
-        processed_roi = self.preprocessor.process(roi)
+        preprocess_variants = self.preprocessor.process_variants(roi)
         timings["preprocess"] = int((perf_counter() - t2) * 1000)
 
         t3 = perf_counter()
-        ocr_data: OCRResultData = self.ocr_router.run(processed_roi)
+        ocr_candidates: list[OCRResultData] = [self.ocr_router.run(roi)]
+        # Preprocessed variants are important for dot-matrix and low-resolution text.
+        for variant in preprocess_variants:
+            ocr_candidates.append(self.ocr_router.run(variant))
+        ocr_data = max(ocr_candidates, key=self._score_ocr_candidate)
         timings["ocr"] = int((perf_counter() - t3) * 1000)
 
         if ocr_data.reason and not ocr_data.raw_text:
@@ -102,14 +109,23 @@ class ExpiryPipeline:
                 detected=True,
                 detector_confidence=detection.confidence,
                 ocr=ocr_data,
-                roi=processed_roi,
+                roi=roi,
             )
 
         t4 = perf_counter()
-        parsed: ParsedDateData = self.parser.parse(ocr_data.normalized_text)
+        parsed: ParsedDateData = self.parser.parse(ocr_data.normalized_text, reference_date=today)
         timings["parse"] = int((perf_counter() - t4) * 1000)
 
         if parsed.parsed_date is None:
+            fallback = self._run_full_image_fallback(
+                image=image,
+                today=today,
+                timings=timings,
+                reason_prefix="roi_parse_failed_fallback",
+                detector_confidence=detection.confidence,
+            )
+            if fallback is not None:
+                return fallback
             return self._failed(
                 final_status=FinalResultStatus.PARSER_FAILED,
                 reason=parsed.reason,
@@ -118,14 +134,14 @@ class ExpiryPipeline:
                 detector_confidence=detection.confidence,
                 ocr=ocr_data,
                 parsed=parsed,
-                roi=processed_roi,
+                roi=roi,
             )
 
         t5 = perf_counter()
         decision: DecisionResult = self.decision.decide(parsed.parsed_date, today=today, parse_confidence=parsed.confidence)
         timings["decision"] = int((perf_counter() - t5) * 1000)
 
-        roi_png = self._encode_png(processed_roi)
+        roi_png = self._encode_png(roi)
 
         return PipelineRunOutput(
             detected=True,
@@ -148,12 +164,70 @@ class ExpiryPipeline:
             roi_png_bytes=roi_png,
         )
 
+    def _run_full_image_fallback(
+        self,
+        *,
+        image: np.ndarray,
+        today: date,
+        timings: dict[str, int],
+        reason_prefix: str,
+        detector_confidence: float | None = None,
+    ) -> PipelineRunOutput | None:
+        t_ocr = perf_counter()
+        ocr_data: OCRResultData = self.ocr_router.run(image)
+        timings["ocr_full_image_fallback"] = int((perf_counter() - t_ocr) * 1000)
+        if not ocr_data.raw_text:
+            return None
+
+        t_parse = perf_counter()
+        parsed: ParsedDateData = self.parser.parse(ocr_data.normalized_text, reference_date=today)
+        timings["parse_full_image_fallback"] = int((perf_counter() - t_parse) * 1000)
+        if parsed.parsed_date is None:
+            return None
+
+        t_decision = perf_counter()
+        decision: DecisionResult = self.decision.decide(parsed.parsed_date, today=today, parse_confidence=parsed.confidence)
+        timings["decision"] = int((perf_counter() - t_decision) * 1000)
+
+        return PipelineRunOutput(
+            detected=detector_confidence is not None,
+            detector_confidence=detector_confidence,
+            raw_text=ocr_data.raw_text,
+            normalized_text=ocr_data.normalized_text,
+            ocr_confidence=ocr_data.confidence,
+            ocr_engine=ocr_data.engine_name,
+            ocr_runtime_device=ocr_data.runtime_device,
+            parsed_date=parsed.parsed_date,
+            date_format_detected=parsed.date_format_detected,
+            parse_confidence=parsed.confidence,
+            expiry_classification=decision.expiry_classification,
+            days_remaining=decision.days_remaining,
+            alert_required=decision.alert_required,
+            needs_review=decision.needs_review,
+            final_status=decision.final_status,
+            reason=f"{reason_prefix};{parsed.reason};{decision.reason}",
+            stage_timings_ms=timings,
+            roi_png_bytes=self._encode_png(image),
+        )
+
     @staticmethod
     def _decode_image(image_bytes: bytes) -> np.ndarray | None:
         array = np.frombuffer(image_bytes, dtype=np.uint8)
         if array.size == 0:
             return None
         return cv2.imdecode(array, cv2.IMREAD_COLOR)
+
+    @staticmethod
+    def _score_ocr_candidate(ocr: OCRResultData) -> float:
+        if not ocr.raw_text:
+            return -1.0
+        score = (ocr.confidence or 0.0) * 10.0
+        text = ocr.raw_text
+        if any(sep in text for sep in ("/", "-", ".")):
+            score += 1.0
+        if any(char.isdigit() for char in text):
+            score += 0.5
+        return score
 
     @staticmethod
     def _encode_png(image: np.ndarray) -> bytes | None:

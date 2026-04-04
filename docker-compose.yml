@@ -6,33 +6,47 @@ services:
       POSTGRES_USER: smartbite
       POSTGRES_PASSWORD: smartbite
     ports:
-      - "5432:5432"
+      - "${SMARTBITE_POSTGRES_PORT:-15432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "${SMARTBITE_REDIS_PORT:-16379}:6379"
 
   api:
-    build: .
-    command: smartbite-api
+    build:
+      context: .
+      args:
+        SMARTBITE_INSTALL_AI: "0"
+    command: /bin/sh /app/app/scripts/start_api_with_migrations.sh
     environment:
       SMARTBITE_DATABASE_URL: postgresql+asyncpg://smartbite:smartbite@postgres:5432/smartbite
       SMARTBITE_REDIS_URL: redis://redis:6379/0
       SMARTBITE_STORAGE_ROOT: /app/data/storage
       SMARTBITE_OCR_DEVICE_MODE: auto
+      SMARTBITE_OCR_PPOCRV5_MAIN_MODEL_DIR: models/fine-tuned-models/best_model_inference
+      SMARTBITE_OCR_PPOCRV5_MAIN_CHAR_DICT_PATH: ppocr/utils/dict/ppocrv5_dict.txt
+      SMARTBITE_OCR_PPOCRV5_USE_ANGLE_CLS: "true"
+      SMARTBITE_OCR_PPOCRV5_DET_DB_THRESH: "0.3"
+      SMARTBITE_OCR_PPOCRV5_DET_DB_BOX_THRESH: "0.5"
+      PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK: "True"
+      SMARTBITE_MIGRATION_MAX_RETRIES: 30
+      SMARTBITE_MIGRATION_RETRY_SECONDS: 2
     volumes:
       - .:/app
     depends_on:
       - postgres
       - redis
     ports:
-      - "${SMARTBITE_API_PORT:-8001}:8000"
+      - "${SMARTBITE_API_PORT:-8005}:${SMARTBITE_API_PORT:-8005}"
 
   worker:
-    build: .
+    build:
+      context: .
+      args:
+        SMARTBITE_INSTALL_AI: "1"
     command: smartbite-worker
     profiles:
       - docker-worker
@@ -41,6 +55,12 @@ services:
       SMARTBITE_REDIS_URL: redis://redis:6379/0
       SMARTBITE_STORAGE_ROOT: /app/data/storage
       SMARTBITE_OCR_DEVICE_MODE: auto
+      SMARTBITE_OCR_PPOCRV5_MAIN_MODEL_DIR: models/fine-tuned-models/best_model_inference
+      SMARTBITE_OCR_PPOCRV5_MAIN_CHAR_DICT_PATH: ppocr/utils/dict/ppocrv5_dict.txt
+      SMARTBITE_OCR_PPOCRV5_USE_ANGLE_CLS: "true"
+      SMARTBITE_OCR_PPOCRV5_DET_DB_THRESH: "0.3"
+      SMARTBITE_OCR_PPOCRV5_DET_DB_BOX_THRESH: "0.5"
+      PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK: "True"
     volumes:
       - .:/app
     depends_on:

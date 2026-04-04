@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import shlex
 import subprocess
 import sys
@@ -15,6 +16,16 @@ class DataLayout:
     val_images_dir: Path
     train_label_file: Path
     val_label_file: Path
+
+
+@dataclass(slots=True)
+class RuntimeDiagnostics:
+    paddle_available: bool
+    paddle_cuda_available: bool
+    torch_available: bool
+    torch_cuda_available: bool
+    torch_mps_built: bool
+    torch_mps_available: bool
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -38,30 +49,69 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def detect_runtime_device(mode: str) -> str:
+def collect_runtime_diagnostics() -> RuntimeDiagnostics:
+    paddle_available = False
+    paddle_cuda_available = False
+    torch_available = False
+    torch_cuda_available = False
+    torch_mps_built = False
+    torch_mps_available = False
+
+    if importlib.util.find_spec("paddle") is not None:
+        try:
+            import paddle  # type: ignore
+
+            paddle_available = True
+            paddle_cuda_available = bool(paddle.is_compiled_with_cuda())
+        except Exception:
+            pass
+
+    if importlib.util.find_spec("torch") is not None:
+        try:
+            import torch  # type: ignore
+
+            torch_available = True
+            torch_cuda_available = bool(torch.cuda.is_available())
+            torch_mps_built = bool(hasattr(torch.backends, "mps") and torch.backends.mps.is_built())
+            torch_mps_available = bool(hasattr(torch.backends, "mps") and torch.backends.mps.is_available())
+        except Exception:
+            pass
+
+    return RuntimeDiagnostics(
+        paddle_available=paddle_available,
+        paddle_cuda_available=paddle_cuda_available,
+        torch_available=torch_available,
+        torch_cuda_available=torch_cuda_available,
+        torch_mps_built=torch_mps_built,
+        torch_mps_available=torch_mps_available,
+    )
+
+
+def resolve_training_device(mode: str, diagnostics: RuntimeDiagnostics) -> tuple[str, list[str]]:
     explicit = mode.lower()
-    if explicit in {"cpu", "mps", "cuda"}:
-        return explicit
+    notes: list[str] = []
 
-    try:
-        import torch
+    if explicit == "cpu":
+        return "cpu", notes
 
-        if torch.cuda.is_available():
-            return "cuda"
-        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            return "mps"
-    except Exception:
-        pass
-    return "cpu"
+    if explicit == "cuda":
+        if diagnostics.paddle_cuda_available:
+            return "cuda", notes
+        notes.append("CUDA requested, but Paddle is not CUDA-enabled in this environment. Falling back to CPU.")
+        return "cpu", notes
 
+    if explicit == "mps":
+        notes.append("MPS requested, but PaddleOCR training path supports CUDA/CPU only. Falling back to CPU.")
+        if diagnostics.torch_mps_built and not diagnostics.torch_mps_available:
+            notes.append("PyTorch MPS backend is built but unavailable to this process.")
+        return "cpu", notes
 
-def resolve_training_device(mode: str) -> str:
-    detected = detect_runtime_device(mode)
-    # Paddle OCR training supports CUDA or CPU. MPS request keeps ppocrv5 path
-    # but falls back to CPU training execution.
-    if detected == "mps":
-        return "cpu"
-    return detected
+    # auto
+    if diagnostics.paddle_cuda_available:
+        return "cuda", notes
+    if diagnostics.torch_mps_available:
+        notes.append("PyTorch reports MPS available, but PaddleOCR training cannot use MPS. Using CPU.")
+    return "cpu", notes
 
 
 def require_exists(path: Path, kind: str) -> None:
@@ -161,7 +211,8 @@ def run(argv: list[str] | None = None) -> int:
         print(f"Validation error: {exc}", file=sys.stderr)
         return 2
 
-    training_device = resolve_training_device(args.device)
+    diagnostics = collect_runtime_diagnostics()
+    training_device, device_notes = resolve_training_device(args.device, diagnostics)
     command = build_training_command(args, layout, training_device)
 
     print("PP-OCRv5 recognition fine-tuning setup")
@@ -170,12 +221,27 @@ def run(argv: list[str] | None = None) -> int:
     print(f"- val_samples: {stats['val_samples']}")
     print(f"- device_requested: {args.device}")
     print(f"- device_used: {training_device}")
+    print(
+        f"- runtime_diag: paddle_available={diagnostics.paddle_available} "
+        f"paddle_cuda={diagnostics.paddle_cuda_available} "
+        f"torch_available={diagnostics.torch_available} "
+        f"torch_mps_built={diagnostics.torch_mps_built} "
+        f"torch_mps_available={diagnostics.torch_mps_available}"
+    )
+    for note in device_notes:
+        print(f"- note: {note}")
+    if not diagnostics.paddle_available:
+        print("- note: `paddle` is not installed in this environment. Real training will fail until it is installed.")
     print("- command:")
     print("  " + shlex.join(command))
 
     if args.dry_run:
         print("Dry run successful. Launch skipped.")
         return 0
+
+    if not diagnostics.paddle_available:
+        print("Validation error: missing runtime dependency `paddle` for real training", file=sys.stderr)
+        return 2
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     subprocess.run(command, check=True)

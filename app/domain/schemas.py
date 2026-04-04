@@ -44,6 +44,13 @@ class ScanGetResponse(BaseModel):
     result: ScanResultPayload | None = None
 
 
+class OneShotAnalyzeResponse(BaseModel):
+    scan_id: UUID
+    status: ScanStatus
+    result: ScanResultPayload
+    stage_timings_ms: dict[str, int] | None = None
+
+
 class ManualCorrectionRequest(BaseModel):
     parsed_date: date | None = None
     reason: str = Field(min_length=3)

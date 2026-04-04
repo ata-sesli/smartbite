@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import os
+
+# Ensure Paddle does not perform remote model-hoster reachability checks on startup.
+os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "True"
+
 from arq.worker import Worker
 from arq.connections import RedisSettings
 
