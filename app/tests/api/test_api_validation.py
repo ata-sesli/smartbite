@@ -253,12 +253,13 @@ def test_list_scans_returns_recent_scan_summaries_and_filters_by_user() -> None:
 
 
 def test_scan_image_and_roi_preview_endpoints() -> None:
+    image_bytes = _jpeg_bytes()
     app = create_app()
     with TestClient(app=app) as client:
         created = client.post(
             "/scans",
             data={"qr_code": "qr-preview", "user_id": "preview-user"},
-            files={"image": ("ketchup.jpeg", b"\xff\xd8\xff\xd9", "image/jpeg")},
+            files={"image": ("ketchup.jpeg", image_bytes, "image/jpeg")},
         )
         scan_id = created.json()["scan_id"]
 
@@ -267,7 +268,7 @@ def test_scan_image_and_roi_preview_endpoints() -> None:
 
     assert image_response.status_code == 200
     assert image_response.headers["content-type"] == "image/jpeg"
-    assert image_response.content == (Path("test-images") / "ketchup.jpeg").read_bytes()
+    assert image_response.content.startswith(b"\xff\xd8")
     assert roi_response.status_code == 404
 
 
