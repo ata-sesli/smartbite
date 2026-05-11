@@ -3,12 +3,12 @@ from __future__ import annotations
 from datetime import date, datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import Boolean, Date, DateTime, Enum, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, Enum, Float, ForeignKey, Integer, JSON, LargeBinary, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 from sqlalchemy.types import Uuid
 
-from app.domain.enums import AlertType, DeliveryStatus, ExpiryClassification, FinalResultStatus, ScanStatus
+from app.domain.enums import AlertType, DeliveryStatus, ExpiryClassification, FinalResultStatus, ReviewVerdict, ScanStatus
 
 
 class Base(DeclarativeBase):
@@ -63,6 +63,57 @@ class OCRResult(Base):
     runtime_device: Mapped[str | None] = mapped_column(String(16), nullable=True)
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ProductTextResult(Base):
+    __tablename__ = "product_text_results"
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    scan_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), ForeignKey("scans.id"), nullable=True, index=True)
+    product_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    brand: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    full_text: Mapped[str] = mapped_column(Text)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    engine_name: Mapped[str] = mapped_column(String(64))
+    runtime_device: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_endpoint: Mapped[str] = mapped_column(String(128))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class MobileExpiryScan(Base):
+    __tablename__ = "mobile_expiry_scans"
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    image_blob: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    image_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    image_content_type: Mapped[str] = mapped_column(String(128), nullable=False)
+    detected_expiry_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    corrected_expiry_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    raw_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    normalized_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    recognition_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    detector_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    status: Mapped[str] = mapped_column(String(64), index=True)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    detection_polygon_json: Mapped[list[list[float]] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    corrected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class Test64ExpectedDate(Base):
+    __tablename__ = "test64_expected_dates"
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    filename: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    expected_day: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    expected_month: Mapped[int] = mapped_column(Integer, nullable=False)
+    expected_year: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
 class ParsedDateResult(Base):
@@ -120,3 +171,21 @@ class ProcessingLog(Base):
     elapsed_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     payload_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ScanReview(Base):
+    __tablename__ = "scan_reviews"
+    __table_args__ = (UniqueConstraint("scan_id", name="uq_scan_reviews_scan_id"),)
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    scan_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), ForeignKey("scans.id"), index=True)
+    verdict: Mapped[ReviewVerdict] = mapped_column(Enum(ReviewVerdict, native_enum=False), index=True)
+    accepted_for_training: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    final_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    final_parsed_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    bbox_xyxy: Mapped[list[float] | None] = mapped_column(JSON, nullable=True)
+    bbox_source: Mapped[str] = mapped_column(String(64), default="original_image")
+    reviewer_id: Mapped[str] = mapped_column(String(128), default="console", index=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

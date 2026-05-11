@@ -39,6 +39,10 @@ class ParsedDateData:
     confidence: float
     candidates: list[str]
     reason: str
+    date_precision: str | None = None
+    parsed_day: int | None = None
+    parsed_month: int | None = None
+    parsed_year: int | None = None
 
 
 @dataclass(slots=True)

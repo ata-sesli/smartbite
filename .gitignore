@@ -383,5 +383,12 @@ package
 # Custom rules (everything added below won't be overriden by 'Generate .gitignore File' if you use 'Update' option)
 
 data/
-models/
 artifacts/
+.paddleocr/
+.paddlex_cache
+.pnpm-store/
+.uv-cache/
+.uv-cache-local/
+.mplconfig
+test-images/
+models/smartbite_svtrv2_expdate_rec.zip

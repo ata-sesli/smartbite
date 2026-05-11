@@ -46,6 +46,7 @@ async def test_manual_correction_updates_classification() -> None:
             accepted_file_types=settings.accepted_file_types,
             accepted_file_extensions=settings.accepted_file_extensions,
             alert_threshold_days=settings.alert_threshold_days,
+            scan_job_expires_seconds=settings.scan_job_expires_seconds,
         )
         _, _, classification, days_remaining = await service.manual_correct_scan(
             scan.id,

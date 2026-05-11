@@ -8,7 +8,7 @@ from app.ai.types import BoundingBox, DetectionResult
 
 
 class ExpiryRegionDetector:
-    def __init__(self, model_path: Path, confidence_threshold: float = 0.25) -> None:
+    def __init__(self, model_path: Path, confidence_threshold: float = 0.15) -> None:
         self.model_path = model_path
         self.confidence_threshold = confidence_threshold
         self._model = None

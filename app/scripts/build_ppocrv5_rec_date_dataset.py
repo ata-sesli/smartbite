@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from PIL import Image
+from PIL import Image, ImageOps
 
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
@@ -522,7 +522,8 @@ def parse_split_file(
 
 def open_image_size(path: Path) -> tuple[int, int]:
     with Image.open(path) as image:
-        return image.width, image.height
+        oriented = ImageOps.exif_transpose(image)
+        return oriented.width, oriented.height
 
 
 def export_image(source_path: Path, destination_path: Path, copy_mode: str, dry_run: bool) -> None:
@@ -538,6 +539,7 @@ def export_image(source_path: Path, destination_path: Path, copy_mode: str, dry_
         return
 
     with Image.open(source_path) as image:
+        image = ImageOps.exif_transpose(image)
         if image.mode not in {"RGB", "L"}:
             converted = image.convert("RGB")
             converted.save(destination_path, format="JPEG", quality=95)

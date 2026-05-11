@@ -296,7 +296,7 @@ docker compose up -d postgres redis api
 
 ## 8) PP-OCRv5 model artifacts and substitute model
 Detector model default:
-- `SMARTBITE_DETECTOR_MODEL_PATH=yolo26n.pt`
+- `SMARTBITE_DETECTOR_MODEL_PATH=models/yolo20n/yolo26s/yolo26s-best.pt`
 
 Main model path config (active by default):
 - `SMARTBITE_OCR_PPOCRV5_MAIN_MODEL_DIR`
@@ -342,3 +342,6 @@ Each label line format:
 ```text
 relative/image/path.jpg<TAB>text label
 ```
+curl -sS -X POST \
+  -F image=@test-images/sarelle-chocolate.jpeg \
+  http://localhost:8005/scans/oneshot

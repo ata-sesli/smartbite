@@ -32,6 +32,8 @@ async def list_expiry(
         accepted_file_types=settings.accepted_file_types,
         accepted_file_extensions=settings.accepted_file_extensions,
         alert_threshold_days=settings.alert_threshold_days,
+        scan_job_expires_seconds=settings.scan_job_expires_seconds,
+        general_text_ocr_timeout_seconds=settings.general_text_ocr_timeout_seconds,
     )
 
     items = await service.list_expiry(

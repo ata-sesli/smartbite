@@ -1,696 +1,268 @@
-# SMARTBITE V1 — Backend + AI Implementation Plan
+# SMARTBITE V1 - As-Built Technical Specification
 
-## Purpose
-Build the V1 backend and AI service for SmartBite.
+## 1) Project Scope
+SmartBite V1 is a backend-focused expiry-date analysis system. It accepts product images, runs server-side AI inference, persists intermediate/final results, and exposes operational endpoints for retrieval, corrections, and alerts.
 
-V1 scope is intentionally limited to:
-- accepting product scans from a mobile client,
-- accepting a QR code or product identifier together with the image,
-- detecting and reading the expiry date from packaging,
-- parsing and normalizing the date,
-- classifying expiry status,
-- storing results,
-- exposing backend APIs for retrieval and alert processing.
+V1 includes:
+- Queue-backed scan processing
+- One-shot analysis endpoint for immediate testing
+- Rule-based expiry decisioning
+- DB persistence for full scan lifecycle
+- Minimal web console for internal manual testing
+- Dataset and fine-tuning tooling for PP-OCRv5 recognition workflows
 
-Do **not** implement the mobile application in this version.
+V1 excludes:
+- End-user mobile app
+- Production auth/tenant model
+- Live video streaming pipeline
+- Non-date freshness estimation
 
----
-
-## Core Product Behavior
-Given a scan request containing an image and QR-linked product metadata, the system must:
-1. persist the original image,
-2. create a scan job,
-3. run expiry-date region detection on the image,
-4. crop the detected region of interest,
-5. preprocess the crop for OCR,
-6. extract text from the crop,
-7. parse the extracted text into a normalized date,
-8. classify the item as `safe`, `expiring_soon`, `expired`, or `manual_review_required`,
-9. store all intermediate and final results,
-10. expose the result through the API,
-11. generate alert events for expiring or expired items.
-
----
-
-## Technical Constraints
-- Web framework: **Litestar**
-- Backend language: **Python**
-- AI inference is backend-owned and server-side for V1
-- The AI pipeline must be modular and testable outside the web framework
-- OCR must run only on a detected expiry-date region, not on the full image
-- Date parsing must be rule-based and deterministic after OCR
-- The backend must support asynchronous scan processing
-- Every scan must produce a traceable result, including failure reasons
-
----
-
-## Out of Scope for V1
-- mobile UI or mobile scanning UX
-- push notification client integration
-- fridge hardware integration
-- live video inference
-- product freshness estimation without printed expiry dates
-- end-to-end giant multimodal model
-
----
-
-## Recommended High-Level Architecture
+## 2) Runtime Architecture
 
 ```text
-Mobile Client
+Client/Web Console
   -> Litestar API
-  -> Image Storage + Scan Record
-  -> Async Scan Worker
-  -> Expiry Region Detector
-  -> ROI Preprocessing
-  -> OCR Engine
-  -> Date Parser
-  -> Expiry Decision Engine
-  -> Database Update
-  -> Alert Event Creation
-  -> Result Retrieval API
+  -> Scan row + image persisted
+  -> Redis enqueue
+  -> arq worker
+  -> AI pipeline:
+       decode
+       detect (YOLO)
+       ROI preprocess variants
+       OCR (PP-OCRv5)
+       parse candidates
+       expiry decision
+  -> DB upserts (OCR / parsed / expiry / logs)
+  -> scan finalized
+  -> optional alert event creation
 ```
 
----
+## 3) Technology Stack
+- API: Litestar
+- Persistence: PostgreSQL (default), SQLAlchemy 2.x async, Alembic
+- Queue: Redis + arq
+- Detector: Ultralytics YOLO
+- OCR: PaddleOCR / PP-OCRv5 recognition-first flow
+- Frontend: SvelteKit + TypeScript (internal console)
+- Packaging/runtime: `uv` + `pyproject.toml` entry points
 
-## Required Components
-
-### 1. API Layer
-Implement HTTP APIs for:
-- creating scans,
-- checking scan status,
-- retrieving scan results,
-- listing expiring items,
-- processing alert creation,
-- manually correcting failed or low-confidence results,
-- health/status checks.
-
-### 2. Storage Layer
-Persist:
-- raw uploaded images,
-- cropped ROI images,
-- OCR text,
-- parsed dates,
-- confidence values,
-- processing logs,
-- failure reasons,
-- alert events.
-
-### 3. AI Pipeline Layer
-Implement a modular pipeline with isolated components for:
-- detection,
-- preprocessing,
-- OCR,
-- parsing,
-- decision.
-
-### 4. Background Job Layer
-Use background jobs or async workers for scan execution so upload endpoints remain fast.
-
-### 5. Alert Layer
-Implement backend-side alert eligibility and alert event creation. V1 can stop at event generation or webhook/email stub delivery.
-
----
-
-## Repository Structure
-Use a structure close to this:
-
-```text
-app/
-  api/
-    scans.py
-    items.py
-    expiry.py
-    alerts.py
-    admin.py
-    health.py
-  domain/
-    models.py
-    schemas.py
-    enums.py
-    repositories.py
-    services.py
-  ai/
-    pipeline.py
-    detector.py
-    preprocess.py
-    ocr.py
-    parser.py
-    decision.py
-    types.py
-  workers/
-    scan_jobs.py
-    alert_jobs.py
-  infra/
-    db.py
-    storage.py
-    logging.py
-    settings.py
-    clock.py
-  tests/
-    api/
-    ai/
-    integration/
-```
-
-The AI package must be runnable independently from Litestar for local testing and benchmarking.
-
----
-
-## Core Domain Models
-
-### Product
-Represents product metadata, ideally derived or linked from QR input.
-
-Fields:
-- `id`
-- `qr_code`
-- `name`
-- `brand`
-- `category`
-- `created_at`
-- `updated_at`
-
-### Scan
-Represents one uploaded image and its processing lifecycle.
-
-Fields:
-- `id`
-- `product_id`
-- `user_id`
-- `image_path`
-- `roi_path` nullable
-- `status` enum
-- `created_at`
-- `updated_at`
-- `processed_at` nullable
-
-### OCRResult
-Stores OCR stage output.
-
-Fields:
-- `id`
-- `scan_id`
-- `raw_text`
-- `normalized_text`
-- `ocr_confidence` nullable
-- `engine_name`
-- `created_at`
-
-### ParsedDateResult
-Stores parsed date decision.
-
-Fields:
-- `id`
-- `scan_id`
-- `parsed_date` nullable
-- `date_format_detected` nullable
-- `parse_confidence` nullable
-- `parser_reason`
-- `candidate_dates_json`
-- `created_at`
-
-### ExpiryStatus
-Stores expiry classification.
-
-Fields:
-- `id`
-- `scan_id`
-- `status` enum
-- `days_remaining` nullable
-- `alert_required`
-- `needs_review`
-- `created_at`
-
-### AlertEvent
-Represents a backend-generated alert record.
-
-Fields:
-- `id`
-- `scan_id`
-- `user_id`
-- `alert_type`
-- `delivery_status`
-- `payload_json`
-- `created_at`
-- `sent_at` nullable
-
----
-
-## Required Enums
-
-### ScanStatus
-- `queued`
-- `processing`
-- `done`
-- `failed`
-
-### FinalResultStatus
-- `parsed_success`
-- `parsed_with_low_confidence`
-- `multiple_candidates`
-- `detector_failed`
-- `ocr_failed`
-- `parser_failed`
-- `manual_review_required`
-
-### ExpiryClassification
-- `safe`
-- `expiring_soon`
-- `expired`
-- `manual_review_required`
-
-### AlertType
-- `expiring_soon`
-- `expired`
-- `manual_review`
-
----
-
-## API Contract
+## 4) Core API Contract
 
 ### `POST /scans`
-Create a new scan.
+Purpose:
+- Standard async scan creation.
 
 Input:
-- multipart image file
-- `qr_code`
-- `user_id`
-- optional metadata
+- multipart `image`
+- `qr_code` (required)
+- `user_id` (required)
+- optional `metadata` JSON string
+
+Output:
+- `scan_id`, `status=queued`
+
+### `POST /scans/oneshot`
+Purpose:
+- Immediate analysis endpoint for internal testing.
+
+Input:
+- multipart `image`
+- optional `metadata`
 
 Behavior:
-- validate payload,
-- persist image,
-- create or resolve product from QR,
-- create scan row with `queued`,
-- enqueue async scan job,
-- return `scan_id` and status.
+- Creates a real scan row using generated `qr_code` and user `oneshot`
+- Requires queue availability (`redis` in app state)
+- Polls scan status until `done` or timeout
 
-Response shape:
-
-```json
-{
-  "scan_id": "uuid",
-  "status": "queued"
-}
-```
+Failure modes:
+- `503` if queue unavailable
+- `504` on timeout
 
 ### `GET /scans/{scan_id}`
-Return current processing state and final result if available.
-
-Response shape:
-
-```json
-{
-  "scan_id": "uuid",
-  "status": "done",
-  "result": {
-    "final_status": "parsed_success",
-    "detected": true,
-    "detector_confidence": 0.91,
-    "raw_text": "EXP 29/03/26",
-    "parsed_date": "2026-03-29",
-    "date_format_detected": "DD/MM/YY",
-    "parse_confidence": 0.95,
-    "expiry_classification": "expiring_soon",
-    "days_remaining": 2,
-    "needs_review": false
-  }
-}
-```
-
-### `GET /expiry`
-List processed items with filters.
-
-Supported filters:
-- `status`
-- `user_id`
-- `product_id`
-- `date_from`
-- `date_to`
-
-### `POST /alerts/process`
-Create alert events for eligible scans/items.
-
-Behavior:
-- find items requiring alerts,
-- create idempotent alert events,
-- return summary.
+Purpose:
+- Retrieve current status and final payload.
 
 ### `PATCH /scans/{scan_id}`
-Manual correction endpoint.
+Purpose:
+- Manual correction override (`parsed_date`, `reason`).
 
-Used for:
-- correcting parsed date,
-- resolving ambiguous candidates,
-- overriding unreadable results,
-- forcing review resolution.
+### `GET /expiry`
+Purpose:
+- Filterable list of processed expiry outcomes.
+
+### `POST /alerts/process`
+Purpose:
+- Create idempotent alert events and attempt delivery.
 
 ### `GET /health`
-Simple health endpoint.
+Purpose:
+- Basic service heartbeat.
 
 ### `GET /admin/metrics`
-Expose operational metrics for debugging and evaluation.
-
----
-
-## Async Processing Contract
-Every created scan must pass through this backend job pipeline:
-
-1. load original image,
-2. set scan status to `processing`,
-3. run expiry-date region detection,
-4. if no ROI found, mark `detector_failed`, persist reason, mark review,
-5. crop ROI and persist crop,
-6. preprocess crop,
-7. run OCR,
-8. if OCR fails or empty text, mark `ocr_failed`, persist reason, mark review,
-9. normalize OCR text,
-10. parse candidate dates,
-11. if no valid date, mark `parser_failed`, persist reason, mark review,
-12. compute expiry classification,
-13. persist OCRResult, ParsedDateResult, ExpiryStatus,
-14. mark scan `done`,
-15. create alert event if required.
-
-This pipeline must be idempotent for retries.
-
----
-
-## AI Pipeline Requirements
-
-### Detector
-Goal:
-- locate the expiry-date region on packaging.
-
-Requirements:
-- detector returns bounding box coordinates,
-- detector returns confidence score,
-- detector supports fallback to multiple candidate boxes if confidence is close,
-- detector must be replaceable without changing the API layer.
-
-Recommended initial implementation:
-- YOLO-based expiry region detector.
-
-Detector output type:
-
-```python
-DetectionResult(
-    detected: bool,
-    boxes: list[BoundingBox],
-    best_box: BoundingBox | None,
-    confidence: float | None,
-    reason: str | None,
-)
-```
-
-### Preprocessing
-Goal:
-- improve OCR quality on cropped region.
-
-Required operations:
-- grayscale conversion,
-- resize,
-- contrast enhancement,
-- thresholding or binarization,
-- denoising,
-- optional deskew.
-
-Preprocessing must be configurable and benchmarkable.
-
-### OCR
-Goal:
-- read the date text from the cropped ROI.
-
-Requirements:
-- must accept only ROI image input,
-- return raw text and optional confidence,
-- support swappable engines,
-- preserve original OCR output before normalization.
-
-Recommended V1 engines:
-- PaddleOCR or Tesseract.
-
-OCR output type:
-
-```python
-OCRResultData(
-    raw_text: str,
-    normalized_text: str,
-    confidence: float | None,
-    engine_name: str,
-    reason: str | None,
-)
-```
-
-### Parser
-Goal:
-- convert OCR text into a valid normalized date.
-
-Requirements:
-- support multiple common expiry formats,
-- detect and rank candidate dates,
-- reject likely lot numbers and manufacturing dates when possible,
-- normalize to ISO `YYYY-MM-DD`,
-- return parse confidence and explanation.
-
-Parser must support at least these patterns:
-- `DD/MM/YYYY`
-- `DD/MM/YY`
-- `DD-MM-YYYY`
-- `DD-MM-YY`
-- `YYYY-MM-DD`
-- `MM/YYYY`
-- `DD MON YYYY`
-- strings prefixed with `EXP`, `USE BY`, `BEST BEFORE`
-
-Parser must filter or de-prioritize tokens like:
-- `LOT`
-- `BATCH`
-- `MFG`
-- `PROD`
-
-Parser output type:
-
-```python
-ParsedDateData(
-    parsed_date: date | None,
-    date_format_detected: str | None,
-    confidence: float,
-    candidates: list[str],
-    reason: str,
-)
-```
-
-### Decision Engine
-Goal:
-- classify result for business usage.
-
-Rules:
-- if date parse failed -> `manual_review_required`
-- if parsed date < today -> `expired`
-- if parsed date within configurable threshold days -> `expiring_soon`
-- else -> `safe`
-
-Threshold must be configurable, defaulting to a small number such as `3` days.
-
-Decision output type:
-
-```python
-DecisionResult(
-    final_status: str,
-    expiry_classification: str,
-    days_remaining: int | None,
-    alert_required: bool,
-    needs_review: bool,
-    reason: str,
-)
-```
-
----
-
-## Configuration Requirements
-All configuration must live outside code defaults where reasonable.
-
-Config must include:
-- database connection
-- storage root
-- OCR engine selection
-- alert threshold days
-- model paths
-- scan retry settings
-- log level
-- image size limits
-- accepted file types
-
-Use environment-driven settings with a typed settings object.
-
----
-
-## Storage Requirements
-- Store original uploaded images
-- Store cropped ROI images
-- Use deterministic file naming by scan ID
-- Keep storage abstraction independent from local disk so it can later move to object storage
-- Persist image paths in database, not image blobs
-
----
-
-## Logging and Observability
-Every scan job must produce structured logs including:
-- scan ID
-- product ID
-- user ID
-- pipeline stage
-- elapsed time per stage
-- detector confidence
-- OCR confidence
-- parser outcome
-- final classification
-- failure reason if any
-
-Expose aggregate metrics for:
-- total scans
-- detector failures
-- OCR failures
-- parser failures
-- manual review rate
-- average processing latency
-- alert creation counts
-
----
-
-## Failure Handling Rules
-The system must never silently fail.
-
-Failure cases must be persisted with explicit reasons:
-- no expiry region detected
-- multiple conflicting candidate regions
-- OCR returned empty text
-- OCR text unusable
-- no valid date parsed
-- multiple dates found with low certainty
-- image unreadable
-
-On failure:
-- mark scan `done` if processing completed but result requires review,
-- use `manual_review_required` for user-facing final classification,
-- store full failure reason,
-- allow manual override through API.
-
----
-
-## Idempotency Rules
-- `POST /scans` may create a new scan each time, but downstream alert generation must be idempotent
-- scan job retries must not duplicate OCRResult, ParsedDateResult, or AlertEvent incorrectly
-- `POST /alerts/process` must be safe to call repeatedly
-
----
-
-## Security and Validation
-- validate uploaded file type
-- validate file size
-- reject unsupported image formats
-- sanitize metadata inputs
-- never trust QR-derived product metadata blindly without schema validation
-- authenticate API access if auth already exists in project scope
-
----
-
-## Database Choice
-Use a relational database for V1.
-Recommended:
-- PostgreSQL for main persistence
-- SQLite only for very local prototyping if needed
-
-Use migrations from the beginning.
-
----
-
-## Minimal Coding Order
-The coding agent should implement in this order:
-
-1. Litestar app skeleton
-2. typed settings and database connection
-3. core domain models and migrations
-4. image storage abstraction
-5. `POST /scans` and `GET /scans/{scan_id}`
-6. background scan worker skeleton
-7. manual-crop OCR baseline service
-8. parser service with tests
-9. detector interface and YOLO-backed implementation
-10. preprocessing module
-11. full `pipeline.py` orchestration
-12. persistence of OCRResult, ParsedDateResult, ExpiryStatus
-13. `GET /expiry`
-14. alert event generation and `POST /alerts/process`
-15. manual correction endpoint
-16. metrics and structured logging
-
----
-
-## Test Requirements
-
-### Unit tests
-Must cover:
-- parser formats
-- parser rejection of lot/manufacture patterns
-- decision engine classification
-- API schema validation
-- storage path generation
-
-### Integration tests
-Must cover:
-- upload image -> create scan -> process -> retrieve result
-- detector failure path
-- OCR failure path
-- parser failure path
-- alert creation path
-- manual correction flow
-
-### AI evaluation scripts
-Must produce:
-- detection precision/recall/F1
-- OCR character accuracy
-- exact date match accuracy
-- end-to-end expiry classification accuracy
-
----
-
-## Definition of Done for V1
-V1 is complete when the system can:
-- accept an image + QR payload,
-- asynchronously process the scan,
-- detect an expiry date region,
-- run OCR on the ROI,
-- parse a normalized date,
-- classify expiry state,
-- persist all results,
-- expose the result via API,
-- create alert events for eligible items,
-- return review-required states for low-confidence failures.
-
----
-
-## Final Output Contract
-Every completed scan must end in one normalized backend result object with the following conceptual fields:
-
-```json
-{
-  "scan_id": "uuid",
-  "final_status": "parsed_success",
-  "detected": true,
-  "detector_confidence": 0.91,
-  "raw_text": "EXP 29/03/26",
-  "parsed_date": "2026-03-29",
-  "date_format_detected": "DD/MM/YY",
-  "parse_confidence": 0.95,
-  "expiry_classification": "expiring_soon",
-  "days_remaining": 2,
-  "alert_required": true,
-  "needs_review": false,
-  "reason": "parsed_from_exp_prefix"
-}
-```
-
-This normalized shape is the contract the mobile client and future hardware integrations should depend on.
+Purpose:
+- Aggregate operational counters and latency.
+
+## 5) Domain Model (Database)
+
+Primary tables:
+- `products`
+- `scans`
+- `ocr_results` (unique by `scan_id`)
+- `parsed_date_results` (unique by `scan_id`)
+- `expiry_statuses` (unique by `scan_id`)
+- `alert_events` (unique by `scan_id + alert_type`)
+- `processing_logs`
+
+Enumerations:
+- `ScanStatus`: `queued|processing|done|failed`
+- `FinalResultStatus`: includes `parsed_success`, `ocr_failed`, `parser_failed`, `manual_review_required`, etc.
+- `ExpiryClassification`: `safe|expiring_soon|expired|manual_review_required`
+- `AlertType`: `expiring_soon|expired|manual_review`
+- `DeliveryStatus`: `pending|sent|failed`
+
+## 6) Worker and Processing Lifecycle
+The worker entry point is `smartbite-worker` (`app/worker_main.py`), which:
+- forces `PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True`
+- validates AI dependencies (`ultralytics`, `paddle`, `paddleocr`) on startup
+- builds `ExpiryPipeline` from environment settings
+
+Per scan job:
+1. Move scan to `processing`
+2. Load raw image bytes
+3. Run pipeline
+4. Save ROI image if available
+5. Upsert OCR/parse/expiry rows
+6. Finalize scan row
+7. Write stage timing logs
+8. Create alert event if needed
+
+## 7) AI Pipeline (As Implemented)
+
+### Detection (`app/ai/detector.py`)
+- YOLO-based region proposal
+- confidence thresholding
+- explicit error reason propagation for load/inference failures
+
+### ROI preprocessing (`app/ai/preprocess.py`)
+- grayscale conversion
+- CLAHE
+- adaptive Gaussian thresholding
+- morphological close + dilation
+- denoising
+- conditional upscaling for small crops
+- multi-variant output for OCR robustness
+
+### OCR router (`app/ai/ocr.py`)
+- PP-OCRv5 main runner selected by default
+- explicit substitute-model path support (disabled by default)
+- runtime device detection (`auto|cpu|mps|cuda`)
+- effective runtime reported as `cuda` or `cpu` in output
+- recognition path supports rotation search when angle-cls enabled
+- local model directory checks and explicit startup errors
+
+### Parsing (`app/ai/parser.py`)
+- deterministic regex candidate extraction for common date formats
+- confidence scoring and candidate ranking
+- plausibility filters (year and time-window bounds)
+- de-prioritization using low-priority tokens
+- fuzzy month correction for common OCR confusion (`DD/MM/YY_FUZZY_MONTH`)
+
+### Decision engine (`app/ai/decision.py`)
+- maps parsed date into:
+  - `expired`
+  - `expiring_soon`
+  - `safe`
+  - `manual_review_required`
+- uses configurable alert threshold
+- generates review flags for low confidence cases
+
+### Pipeline orchestration (`app/ai/pipeline.py`)
+- staged timings: decode, detect, preprocess, ocr, parse, decision
+- OCR candidate selection across raw + preprocessed variants
+- parse-aware variant selection
+- fallback full-image OCR/parse path when ROI route fails
+- normalized output object for persistence/API
+
+## 8) Operational Configuration
+Primary config is environment-driven through `app/infra/settings.py`.
+
+Key controls:
+- `SMARTBITE_API_PORT` (default `8005`)
+- `SMARTBITE_DATABASE_URL`
+- `SMARTBITE_REDIS_URL`
+- `SMARTBITE_STORAGE_ROOT`
+- `SMARTBITE_OCR_PPOCRV5_MAIN_MODEL_DIR`
+- `SMARTBITE_OCR_PPOCRV5_MAIN_CHAR_DICT_PATH`
+- `SMARTBITE_OCR_DEVICE_MODE`
+- `SMARTBITE_OCR_PPOCRV5_DET_DB_THRESH`
+- `SMARTBITE_OCR_PPOCRV5_DET_DB_BOX_THRESH`
+- `SMARTBITE_OCR_ENABLE_SUBSTITUTE_MODEL`
+
+Docker API startup runs migrations automatically via:
+- `app/scripts/start_api_with_migrations.sh`
+
+## 9) Web Console
+SvelteKit web console (`web/src/routes/+page.svelte`) is designed for internal testing:
+- Analyze section:
+  - upload image
+  - camera capture via `getUserMedia`
+- One-shot request path:
+  - UI -> SvelteKit proxy -> `POST /scans/oneshot`
+- Result panel:
+  - status, scan id, parsed value summary, raw JSON collapsible
+- Secondary tools:
+  - health/metrics
+  - scan lookup
+  - manual correction
+  - expiry/alert processing
+
+## 10) Dataset and Training Tooling
+
+### Trusted recognition dataset exporter
+- CLI: `smartbite-build-ppocrv5-rec-dataset`
+- Source: JSON annotations with bboxes/transcriptions
+- Output:
+  - `train_images/`, `val_images/`
+  - `train_label.txt`, `val_label.txt`
+  - metadata JSONL sidecars
+  - optional component crops
+  - optional bbox-jitter review candidates
+
+### Date-only recognition dataset converter
+- CLI: `smartbite-build-ppocrv5-rec-date-dataset`
+- Label modes:
+  - JSON, TXT, CSV/TSV, JSONL, filename regex
+- Deterministic split/export with validation and summary output
+
+### Semi-auto candidate proposal generator
+- CLI: `smartbite-generate-ppocrv5-rec-candidates`
+- Input modes:
+  - `full_images` (optional YOLO detections JSONL)
+  - `product_crops`
+- Output:
+  - `candidates/images`
+  - `manifest.jsonl`
+  - optional `review.csv`
+  - optional overlays
+  - deterministic heuristic ranking metadata
+
+### Fine-tune launcher
+- CLI: `smartbite-finetune-ppocrv5-rec`
+- Validates PP-OCR dataset layout and prints/launches PaddleOCR training command
+- Supports dry-run diagnostics and device resolution logic
+
+## 11) Verification Snapshot
+Latest local automated run:
+- `UV_CACHE_DIR=.uv-cache-local uv run pytest -q`
+- Result: `63 passed, 1 failed`
+
+Known failing test:
+- `app/tests/api/test_api_validation.py::test_create_one_shot_scan_accepts_valid_upload_without_qr_or_user`
+- Current implementation requires queue availability for one-shot; the test assumes success without Redis.
+
+## 12) Known Constraints and Notes
+- One-shot endpoint is queue-backed, not direct synchronous in-process inference.
+- Native worker requires AI extras (`uv sync --extra ai`).
+- OCR model path must point to exported inference directory, not raw training checkpoint.
+- The code disables Paddle model-hoster connectivity checks to avoid startup delays.
+- `items.py` route area is reserved and not part of active API routing.

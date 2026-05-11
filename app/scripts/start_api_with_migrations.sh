@@ -17,4 +17,5 @@ while ! alembic upgrade head; do
 done
 
 echo "[startup] Migrations are up to date. Starting API..."
-exec smartbite-api
+cd /app
+exec python -c "from app.main import run; run()"

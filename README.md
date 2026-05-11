@@ -1,103 +1,88 @@
 # SmartBite V1
 
-SmartBite is an expiry-date scanning backend with async AI processing, plus a minimal SvelteKit web console.
+SmartBite is an expiry-date scanning backend with asynchronous AI processing and a lightweight SvelteKit testing console.
 
-## Current status
-- Backend API: Litestar
-- Database: PostgreSQL with SQLAlchemy + Alembic
-- Queue/worker: Redis + `arq`
-- Detection: Ultralytics YOLO adapter (default model: `yolo26n.pt`)
-- OCR runtime: PP-OCRv5-first (`ppocrv5_main`)
-- Web: SvelteKit + TypeScript (PNPM)
+## Stack
+- API: Litestar
+- DB: PostgreSQL + SQLAlchemy + Alembic
+- Queue: Redis + arq
+- Detector: Ultralytics YOLO (`models/yolo20n/yolo26s/yolo26s-best.pt` by default)
+- Expiry OCR lane: `YOLO -> PP-OCRv5 text detection -> ParSeq recognition -> parser/decision`
+- General text OCR lane: PP-OCRv5 visible text extraction on separate synchronous endpoint
+- Web console: SvelteKit + TypeScript (PNPM)
 
-## OCR runtime behavior
-- Active default on all devices (`cpu|mps|cuda`): `ppocrv5_main`
-- Default recognition model path: `models/fine-tuned-models/best_model_inference`
-- Default char dict path: `ppocr/utils/dict/ppocrv5_dict.txt`
-- Device selection env: `SMARTBITE_OCR_DEVICE_MODE=auto|cpu|mps|cuda`
-- Substitute model metadata lives in `app/ai/ocr_substitute_config.json`
-- Substitute model is disabled by default (`SMARTBITE_OCR_ENABLE_SUBSTITUTE_MODEL=false`)
-- No silent fallback: missing model/config surfaces explicit failure reasons
-- Easiest switch point: set `SMARTBITE_OCR_PPOCRV5_MAIN_MODEL_DIR` in `.env` and restart the worker
-
-## API endpoints
+## Implemented API
 - `POST /scans`
+- `POST /scans/oneshot`
 - `GET /scans/{scan_id}`
 - `PATCH /scans/{scan_id}`
+- `POST /ocr/general-text`
 - `GET /expiry`
 - `POST /alerts/process`
 - `GET /health`
 - `GET /admin/metrics`
 
-## Quick start (hybrid recommended)
-Hybrid means Docker for infra/API and native host worker for AI.
+### `POST /scans` vs `POST /scans/oneshot`
+- `POST /scans` requires `image`, `qr_code`, and `user_id`, then enqueues async processing.
+- `POST /scans/oneshot` requires only `image` (optional `metadata`) and waits for a completed result by polling scan status.
+- One-shot is still queue-backed. Redis + worker must be available, otherwise one-shot returns `503` or `504`.
 
-1. Create env file:
-   - `cp .env.example .env`
-2. Sync backend dependencies:
-   - `uv sync --extra dev`
-   - `uv sync --extra ai` (required for native worker: Ultralytics + PaddleOCR runtime)
-3. Start infrastructure + API:
-   - `docker compose up -d postgres redis api`
-4. Start worker natively:
-   - `uv run smartbite-worker`
+## OCR runtime behavior
+- ParSeq model directory: `models/parseq-small` (`SMARTBITE_PARSEQ_MODEL_DIR`)
+- PP-OCRv5 text detection model directory (optional): `SMARTBITE_OCR_PPOCRV5_TEXT_DET_MODEL_DIR`
+- Device settings:
+  - `SMARTBITE_OCR_DEVICE_MODE=auto|cpu|mps|cuda` (PP text detector)
+  - `SMARTBITE_PARSEQ_DEVICE_MODE=auto|cpu|mps|cuda`
+- Current safe default: `SMARTBITE_PARSEQ_DEVICE_MODE=cpu` (MPS auto-fallback remains enabled at runtime).
+- Prefetch command: `uv run smartbite-prefetch-models`
+- Startup enforces `PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True` to skip remote host checks
+- Startup validates local model assets and fails fast when strict validation is enabled.
+
+## Run modes
+### 1) Hybrid mode (recommended)
+Docker for Postgres/Redis/API, native worker on host:
+
+```bash
+cp .env.example .env
+uv sync --extra dev
+uv sync --extra ai
+docker compose up -d postgres redis api
+uv run smartbite-worker
+```
 
 Notes:
-- Default published API port is `8005` (`SMARTBITE_API_PORT=8005`).
-- `SMARTBITE_STORAGE_ROOT` in `.env` must match the same host folder that Docker bind-mounts (`data/storage` by default).
+- Default API port is `8005`.
+- Docker API startup auto-runs migrations via `app/scripts/start_api_with_migrations.sh`.
+- `SMARTBITE_STORAGE_ROOT` must point to the same bind-mounted folder (`data/storage` by default).
 
-## Full Docker mode
-Run API + worker in Docker:
+### 2) Full Docker mode
+```bash
+docker compose --profile docker-worker up --build
+```
 
-- `docker compose --profile docker-worker up --build`
+## Web console
+```bash
+cp web/.env.example web/.env
+cd web
+pnpm install
+pnpm dev
+```
 
-## Web console (PNPM only)
-1. Create frontend env:
-   - `cp web/.env.example web/.env`
-2. Start web app:
-   - `cd web`
-   - `pnpm install`
-   - `pnpm sync`
-   - `pnpm check`
-   - `pnpm dev`
+Default proxied backend URL is `http://localhost:8005`.
 
-Default backend target in `web/.env.example` is `http://localhost:8005`.
+## Dataset and training CLIs
+- `smartbite-build-ppocrv5-rec-dataset`
+  - JSON bbox annotations to PP-OCR recognition dataset (+ metadata JSONL, optional component and candidate crops)
+- `smartbite-build-ppocrv5-rec-date-dataset`
+  - Date-only cropped image datasets (JSON/TXT/CSV/JSONL/filename-label modes) to PP-OCR recognition dataset
+- `smartbite-generate-ppocrv5-rec-candidates`
+  - Semi-automatic proposal generation from product images/crops for review-first curation
+- `smartbite-finetune-ppocrv5-rec`
+  - Dataset validation + PP-OCRv5 recognition fine-tuning launch helper
 
-## Fine-tuning PP-OCRv5 recognition
-CLI script:
-- `app/scripts/finetune_ppocrv5_rec.py`
-- Entry point: `smartbite-finetune-ppocrv5-rec`
-
-Dataset exporter for PP-OCRv5 recognition format:
-- `app/scripts/build_ppocrv5_rec_dataset.py`
-- Entry point: `smartbite-build-ppocrv5-rec-dataset`
-- Exports `train_images/`, `val_images/`, `train_label.txt`, `val_label.txt`, and JSONL metadata sidecars.
-- Supports optional DMY component crops and bbox-jitter candidate crops for review/curation.
-- Use this exporter before running `smartbite-finetune-ppocrv5-rec`.
-
-Date-only image converter for PP-OCRv5 recognition format:
-- `app/scripts/build_ppocrv5_rec_date_dataset.py`
-- Entry point: `smartbite-build-ppocrv5-rec-date-dataset`
-- Converts pre-cropped date datasets with multiple label-source formats (JSON/TXT/CSV/JSONL/filename parser) into `train_images/`, `val_images/`, `train_label.txt`, and `val_label.txt`.
-- Use this converter when source data is already cropped to date regions and ready for recognition fine-tuning.
-
-Semi-auto candidate generator for review-first recognition data:
-- `app/scripts/generate_ppocrv5_rec_candidates.py`
-- Entry point: `smartbite-generate-ppocrv5-rec-candidates`
-- Uses PP-OCRv5 line extraction to propose candidate text crops from full product images or product crops.
-- Outputs review artifacts under `candidates/` (`images/`, `manifest.jsonl`, optional `review.csv`, optional overlays) with deterministic heuristic scoring and suggested classes.
-
-Notebook:
-- `notebooks/ppocrv5_finetune_rec.ipynb`
-
-Expected dataset layout:
-- `train_images/`
-- `val_images/`
-- `train_label.txt`
-- `val_label.txt`
-
-Each label line format:
-- `relative/image/path.jpg<TAB>text label`
+## Verification snapshot
+- Current automated test run in this repository: `63 passed, 1 failed`.
+- Known failing case: one-shot API test expects success without queue, but runtime now requires Redis/worker availability.
 
 ## More commands
-For explicit operational commands and troubleshooting, see `COMMANDS.md`.
+Use [COMMANDS.md](COMMANDS.md) for full operational command chains.

@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageOps
 
 from app.ai.ocr import detect_runtime_device
 from app.infra.settings import get_settings
@@ -733,7 +733,7 @@ def render_overlays(candidates: list[Candidate], overlays_dir: Path) -> None:
     overlay_progress = ProgressTracker("Rendering overlays", len(by_image))
     for index, (source_image, grouped) in enumerate(by_image.items(), start=1):
         first = grouped[0]
-        base = Image.open(first.source_image_path).convert("RGB")
+        base = ImageOps.exif_transpose(Image.open(first.source_image_path)).convert("RGB")
         draw = ImageDraw.Draw(base)
 
         for candidate in grouped:
@@ -794,7 +794,7 @@ def run(argv: list[str] | None = None) -> int:
         image_progress.tick(image_index)
 
         try:
-            source_image = Image.open(source_image_path).convert("RGB")
+            source_image = ImageOps.exif_transpose(Image.open(source_image_path)).convert("RGB")
         except Exception as exc:
             counters.skip("image_open_failed")
             warn(f"image={image_id} reason=image_open_failed detail={exc}")

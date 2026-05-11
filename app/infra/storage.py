@@ -16,6 +16,12 @@ class LocalStorage:
     def roi_relative_path(self, scan_id: UUID) -> str:
         return f"roi/{scan_id}.png"
 
+    def debug_candidates_relative_path(self, scan_id: UUID) -> str:
+        return f"debug/{scan_id}/candidates.json"
+
+    def debug_overlay_relative_path(self, scan_id: UUID) -> str:
+        return f"debug/{scan_id}/overlay.png"
+
     def absolute_path(self, relative_path: str) -> Path:
         return self.root / relative_path
 

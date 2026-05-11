@@ -18,6 +18,7 @@ def configure_test_environment(tmp_path_factory: pytest.TempPathFactory) -> None
     os.environ["SMARTBITE_STORAGE_ROOT"] = str(storage_root)
     os.environ["SMARTBITE_REDIS_URL"] = "redis://localhost:6399/0"
     os.environ["SMARTBITE_OCR_DEVICE_MODE"] = "cpu"
+    os.environ["SMARTBITE_MODEL_STARTUP_STRICT_VALIDATION"] = "false"
 
     from app.infra import db as db_module
     from app.infra.settings import get_settings

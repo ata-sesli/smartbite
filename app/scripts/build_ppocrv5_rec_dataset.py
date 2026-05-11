@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from PIL import Image
+from PIL import Image, ImageOps
 
 
 BBox = tuple[int, int, int, int]
@@ -461,7 +461,7 @@ def run(argv: list[str] | None = None) -> int:
 
             if image_exists:
                 try:
-                    pil_image = Image.open(source_image_path)
+                    pil_image = ImageOps.exif_transpose(Image.open(source_image_path))
                     pil_image.load()
                     if source_width is None or source_height is None:
                         source_width, source_height = pil_image.size

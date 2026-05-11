@@ -37,3 +37,10 @@ class DeliveryStatus(StrEnum):
     PENDING = "pending"
     SENT = "sent"
     FAILED = "failed"
+
+
+class ReviewVerdict(StrEnum):
+    CORRECT = "correct"
+    INCORRECT = "incorrect"
+    UNCERTAIN = "uncertain"
+    SKIP = "skip"
