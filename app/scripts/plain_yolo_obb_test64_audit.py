@@ -10,6 +10,7 @@ from typing import Any
 import numpy as np
 from PIL import Image, ImageOps
 
+from app.ai.onnx_inference import YoloObbOnnxDetector
 from app.domain.services import CROP_TRUTH_ANNOTATIONS_PATH
 from app.scripts.detector_truth_ablation import (
     DEFAULT_YOLO_OBB_MODEL_PATH,
@@ -24,6 +25,7 @@ from app.scripts.tiled_yolo_test64_audit import _dedupe_boxes_by_bbox
 
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
+DEFAULT_YOLO_OBB_ONNX_PATH = Path("models/yolo26s_obb_expdate2k_ft_after_brazil/weights/best.onnx")
 
 
 def _utc_stamp() -> str:
@@ -184,11 +186,47 @@ def _audit_image(
     }
 
 
+class OnnxYoloObbAuditDetector:
+    def __init__(self, model_path: Path, *, confidence_threshold: float, imgsz: int, max_candidates: int) -> None:
+        self.model_path = model_path
+        self.confidence_threshold = confidence_threshold
+        self._detector = YoloObbOnnxDetector(
+            model_path=model_path,
+            confidence_threshold=confidence_threshold,
+            imgsz=imgsz,
+            max_candidates=max_candidates,
+        )
+
+    def detect(self, image: np.ndarray) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        detections, reason = self._detector.detect(image)
+        boxes = [
+            {
+                "bbox_xyxy": list(item.bbox_xyxy),
+                "polygon_xy": item.polygon_xy,
+                "confidence": item.confidence,
+                "source": "yolo26s_obb_onnx",
+                "sources": ["yolo26s_obb_onnx"],
+                "variant_name": "original",
+                "roi_source": "full_image",
+                "model_path": str(self.model_path),
+            }
+            for item in detections
+        ]
+        return boxes, {
+            "yolo_detected": bool(boxes),
+            "yolo_reason": reason,
+            "roi_count": 1,
+            "detector_unavailable_reasons": [reason] if reason and not boxes else [],
+        }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Pure YOLO-OBB truth-overlap audit for local test64 files")
     parser.add_argument("--images-dir", type=Path, default=Path("test64"))
     parser.add_argument("--truth-manifest", type=Path, default=Path(CROP_TRUTH_ANNOTATIONS_PATH))
+    parser.add_argument("--backend", choices=("ultralytics", "onnx"), default="ultralytics")
     parser.add_argument("--yolo-model-path", type=Path, default=DEFAULT_YOLO_OBB_MODEL_PATH)
+    parser.add_argument("--yolo-onnx-model-path", type=Path, default=DEFAULT_YOLO_OBB_ONNX_PATH)
     parser.add_argument("--yolo-conf", type=float, default=0.01)
     parser.add_argument("--imgsz", type=int, default=1024)
     parser.add_argument("--max-candidates", type=int, default=12)
@@ -208,7 +246,15 @@ def main() -> None:
     args = parser.parse_args()
 
     truth_items = _load_truth_items(args.truth_manifest)
-    detector = YoloObbDetector(args.yolo_model_path, confidence_threshold=args.yolo_conf)
+    if args.backend == "onnx":
+        detector = OnnxYoloObbAuditDetector(
+            args.yolo_onnx_model_path,
+            confidence_threshold=args.yolo_conf,
+            imgsz=args.imgsz,
+            max_candidates=args.max_candidates,
+        )
+    else:
+        detector = YoloObbDetector(args.yolo_model_path, confidence_threshold=args.yolo_conf)
 
     rows: list[tuple[str, Path, tuple[int, int, int, int]]] = []
     for filename, item in sorted(truth_items.items()):
@@ -223,10 +269,13 @@ def main() -> None:
     if not rows:
         raise SystemExit(f"No truth-bbox images found under {args.images_dir}")
 
-    # Keep the detector pure, but make imgsz explicit by setting the model override used by Ultralytics.
+    # Keep the Ultralytics detector pure, but make imgsz explicit by setting
+    # the model override used by the parity run.
     original_detect = detector.detect
 
     def detect_with_imgsz(image: np.ndarray) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        if not isinstance(detector, YoloObbDetector):
+            return detector.detect(image)
         model = detector._ensure_model()
         results = model.predict(image, conf=detector.confidence_threshold, imgsz=args.imgsz, verbose=False)
         if not results:
@@ -260,11 +309,13 @@ def main() -> None:
             "detector_unavailable_reasons": [],
         }
 
-    detector.detect = detect_with_imgsz  # type: ignore[method-assign]
+    if isinstance(detector, YoloObbDetector):
+        detector.detect = detect_with_imgsz  # type: ignore[method-assign]
 
     item_results = []
     print(
-        f"Starting pure YOLO audit: items={len(rows)} model={args.yolo_model_path} "
+        f"Starting pure YOLO audit: items={len(rows)} backend={args.backend} "
+        f"model={args.yolo_model_path if args.backend == 'ultralytics' else args.yolo_onnx_model_path} "
         f"conf={args.yolo_conf} imgsz={args.imgsz} max_candidates={args.max_candidates} "
         f"apply_exif_orientation={not args.ignore_exif_orientation} "
         f"rotation_fallback_on_no_box={args.rotation_fallback_on_no_box}",
@@ -295,16 +346,19 @@ def main() -> None:
                 flush=True,
             )
     finally:
-        detector.detect = original_detect  # type: ignore[method-assign]
+        if isinstance(detector, YoloObbDetector):
+            detector.detect = original_detect  # type: ignore[method-assign]
 
     flat_results = [item["config"] for item in item_results]
     payload = {
         "generated_at": datetime.utcnow().isoformat() + "Z",
-        "backend": "pure_yolo_obb",
+        "backend": f"pure_yolo_obb_{args.backend}",
         "images_dir": str(args.images_dir.resolve()),
         "truth_manifest": str(args.truth_manifest.resolve()),
         "yolo_model_path": str(args.yolo_model_path),
+        "yolo_onnx_model_path": str(args.yolo_onnx_model_path),
         "settings": {
+            "backend": args.backend,
             "confidence_threshold": args.yolo_conf,
             "imgsz": args.imgsz,
             "max_candidates": args.max_candidates,

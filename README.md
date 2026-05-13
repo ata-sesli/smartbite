@@ -7,8 +7,7 @@ SmartBite is an expiry-date scanning backend with asynchronous AI processing and
 - DB: PostgreSQL + SQLAlchemy + Alembic
 - Queue: Redis + arq
 - Detector: Ultralytics YOLO (`models/yolo20n/yolo26s/yolo26s-best.pt` by default)
-- Expiry OCR lane: `YOLO -> PP-OCRv5 text detection -> ParSeq recognition -> parser/decision`
-- General text OCR lane: PP-OCRv5 visible text extraction on separate synchronous endpoint
+- Expiry OCR lane: `YOLO26s-OBB -> SVTRv2 recognition -> parser/decision`
 - Web console: SvelteKit + TypeScript (PNPM)
 
 ## Implemented API
@@ -16,7 +15,8 @@ SmartBite is an expiry-date scanning backend with asynchronous AI processing and
 - `POST /scans/oneshot`
 - `GET /scans/{scan_id}`
 - `PATCH /scans/{scan_id}`
-- `POST /ocr/general-text`
+- `POST /mobile/expiry-scans`
+- `PATCH /mobile/expiry-scans/{id}`
 - `GET /expiry`
 - `POST /alerts/process`
 - `GET /health`
@@ -28,37 +28,37 @@ SmartBite is an expiry-date scanning backend with asynchronous AI processing and
 - One-shot is still queue-backed. Redis + worker must be available, otherwise one-shot returns `503` or `504`.
 
 ## OCR runtime behavior
-- ParSeq model directory: `models/parseq-small` (`SMARTBITE_PARSEQ_MODEL_DIR`)
-- PP-OCRv5 text detection model directory (optional): `SMARTBITE_OCR_PPOCRV5_TEXT_DET_MODEL_DIR`
-- Device settings:
-  - `SMARTBITE_OCR_DEVICE_MODE=auto|cpu|mps|cuda` (PP text detector)
-  - `SMARTBITE_PARSEQ_DEVICE_MODE=auto|cpu|mps|cuda`
-- Current safe default: `SMARTBITE_PARSEQ_DEVICE_MODE=cpu` (MPS auto-fallback remains enabled at runtime).
+- Expiry detector model: `models/yolo26s_obb_expdate2k_ft_after_brazil/weights/best.pt`
+- SVTRv2 recognition model: `models/svtrv2/smartbite_svtrv2_expdate_rec`
+- Runtime backends default to the verified fallback path:
+  - `SMARTBITE_MOBILE_EXPIRY_DETECTOR_BACKEND=ultralytics`
+  - `SMARTBITE_SVTRV2_REC_BACKEND=paddle`
+- Device setting: `SMARTBITE_SVTRV2_DEVICE_MODE=cpu|cuda`
 - Prefetch command: `uv run smartbite-prefetch-models`
 - Startup enforces `PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True` to skip remote host checks
 - Startup validates local model assets and fails fast when strict validation is enabled.
 
-## Run modes
-### 1) Hybrid mode (recommended)
-Docker for Postgres/Redis/API, native worker on host:
+## ONNX conversion and parity
+```bash
+uv run --extra ai --extra export smartbite-export-onnx-models
+uv run smartbite-yolo-onnx-parity --ultralytics-report path/to/pt_report.json --onnx-report path/to/onnx_report.json
+uv run smartbite-svtr-onnx-parity --paddle-report path/to/paddle_report.json --onnx-report path/to/onnx_report.json
+```
 
+Switch `SMARTBITE_MOBILE_EXPIRY_DETECTOR_BACKEND=onnx` or `SMARTBITE_SVTRV2_REC_BACKEND=onnx` only after the parity reports are acceptable.
+
+## Run modes
+### Full Docker mode
 ```bash
 cp .env.example .env
-uv sync --extra dev
-uv sync --extra ai
-docker compose up -d postgres redis api
-uv run smartbite-worker
+docker compose up -d --build
 ```
 
 Notes:
 - Default API port is `8005`.
 - Docker API startup auto-runs migrations via `app/scripts/start_api_with_migrations.sh`.
-- `SMARTBITE_STORAGE_ROOT` must point to the same bind-mounted folder (`data/storage` by default).
-
-### 2) Full Docker mode
-```bash
-docker compose --profile docker-worker up --build
-```
+- The API, worker, Postgres, and Redis all start with plain `docker compose up -d`.
+- `SMARTBITE_STORAGE_ROOT` points to the shared bind-mounted folder (`data/storage` by default).
 
 ## Web console
 ```bash
@@ -69,20 +69,6 @@ pnpm dev
 ```
 
 Default proxied backend URL is `http://localhost:8005`.
-
-## Dataset and training CLIs
-- `smartbite-build-ppocrv5-rec-dataset`
-  - JSON bbox annotations to PP-OCR recognition dataset (+ metadata JSONL, optional component and candidate crops)
-- `smartbite-build-ppocrv5-rec-date-dataset`
-  - Date-only cropped image datasets (JSON/TXT/CSV/JSONL/filename-label modes) to PP-OCR recognition dataset
-- `smartbite-generate-ppocrv5-rec-candidates`
-  - Semi-automatic proposal generation from product images/crops for review-first curation
-- `smartbite-finetune-ppocrv5-rec`
-  - Dataset validation + PP-OCRv5 recognition fine-tuning launch helper
-
-## Verification snapshot
-- Current automated test run in this repository: `63 passed, 1 failed`.
-- Known failing case: one-shot API test expects success without queue, but runtime now requires Redis/worker availability.
 
 ## More commands
 Use [COMMANDS.md](COMMANDS.md) for full operational command chains.

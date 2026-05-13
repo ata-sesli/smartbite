@@ -13,15 +13,23 @@
     variantName: string;
   };
 
+  type ProductRoi = {
+    bboxXyxy: [number, number, number, number];
+    confidence: number | null;
+    source: string;
+  };
+
   type DetectorAuditConfigResult = {
     configName: string;
     verdict: string;
     boxCount: number | null;
+    productRoiCount: number | null;
     bestIou: number | null;
     truthCoverageRatio: number | null;
     runtimeMs: number | null;
     bestBox: DetectorBox | null;
     detectorBoxes: DetectorBox[];
+    productRois: ProductRoi[];
   };
 
   type DetectorAuditItem = {
@@ -36,6 +44,12 @@
     kind: NoticeKind;
     text: string;
   } | null;
+
+  export let endpoint = '/api/test64/detection-review';
+  export let title = 'Detection Review';
+  export let description = 'Detector-only truth overlap. No recognition, parsing, or full-pipeline verdicts.';
+  export let emptyText = 'No detector audit items available.';
+  export let configSwitchDescription = 'Switch configs without mixing in recognition results.';
 
   let loading = false;
   let notice: Notice = null;
@@ -106,18 +120,33 @@
     };
   }
 
+  function mapProductRoi(raw: unknown): ProductRoi | null {
+    if (!isRecord(raw) || !Array.isArray(raw.bbox_xyxy) || raw.bbox_xyxy.length !== 4) return null;
+    const bbox = raw.bbox_xyxy;
+    if (!bbox.every((value) => typeof value === 'number' && Number.isFinite(value))) return null;
+    return {
+      bboxXyxy: [bbox[0], bbox[1], bbox[2], bbox[3]],
+      confidence: numberOrNull(raw.confidence),
+      source: text(raw.source)
+    };
+  }
+
   function mapAuditConfig(raw: unknown): DetectorAuditConfigResult | null {
     if (!isRecord(raw)) return null;
     return {
       configName: text(raw.config_name),
       verdict: text(raw.verdict),
       boxCount: numberOrNull(raw.box_count),
+      productRoiCount: numberOrNull(raw.product_roi_count),
       bestIou: numberOrNull(raw.best_iou),
       truthCoverageRatio: numberOrNull(raw.truth_coverage_ratio),
       runtimeMs: numberOrNull(raw.runtime_ms),
       bestBox: mapDetectorBox(raw.best_box),
       detectorBoxes: Array.isArray(raw.detector_boxes)
         ? raw.detector_boxes.map(mapDetectorBox).filter((box): box is DetectorBox => box !== null)
+        : [],
+      productRois: Array.isArray(raw.product_rois)
+        ? raw.product_rois.map(mapProductRoi).filter((roi): roi is ProductRoi => roi !== null)
         : []
     };
   }
@@ -151,7 +180,7 @@
     loading = true;
     notice = null;
     try {
-      const payload = await handleResponse(await fetch('/api/test64/detection-review'));
+      const payload = await handleResponse(await fetch(endpoint));
       runId = text(payload.run_id);
       source = text(payload.source);
       summary = isRecord(payload.summary) ? payload.summary : {};
@@ -160,7 +189,7 @@
         ? payload.items.map(mapAuditItem).filter((item): item is DetectorAuditItem => item !== null)
         : [];
       activeIndex = Math.min(activeIndex, Math.max(0, items.length - 1));
-      notice = { kind: 'success', text: `Loaded ${items.length} detector audit items.` };
+      notice = { kind: 'success', text: `Loaded ${items.length} ${title.toLowerCase()} items.` };
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unexpected error';
       notice = { kind: 'error', text: message };
@@ -226,6 +255,10 @@
     return rectFromXyxy(box.bboxXyxy);
   }
 
+  function roiRectAttrs(roi: ProductRoi): { x: number; y: number; width: number; height: number } {
+    return rectFromXyxy(roi.bboxXyxy);
+  }
+
   function polygonPoints(box: DetectorBox): string {
     return (box.polygonXy ?? []).map(([x, y]) => `${x},${y}`).join(' ');
   }
@@ -242,8 +275,8 @@
 <section class="panel recognition-review-panel detection-review-panel">
   <div class="panel-heading recognition-review-heading">
     <div>
-      <h2>Detection Review</h2>
-      <p>Detector-only truth overlap. No recognition, parsing, or full-pipeline verdicts.</p>
+      <h2>{title}</h2>
+      <p>{description}</p>
     </div>
     <div class="recognition-review-actions">
       <button type="button" on:click={() => loadReview()} disabled={loading}>
@@ -288,6 +321,12 @@
         <span>Avg Boxes</span>
         <strong>{formatDecimal(selectedSummary.average_box_count)}</strong>
       </div>
+      {#if selectedConfig?.productRoiCount !== null && selectedConfig?.productRoiCount !== undefined}
+        <div class="status-item">
+          <span>Product ROIs</span>
+          <strong>{formatCount(selectedConfig.productRoiCount)}</strong>
+        </div>
+      {/if}
       <div class="status-item">
         <span>Avg Runtime</span>
         <strong>{formatDecimal(selectedSummary.average_runtime_ms)} ms</strong>
@@ -302,7 +341,7 @@
   <div class="recognition-review-layout">
     <aside class="recognition-review-list" aria-label="Detector audit items">
       {#if items.length === 0}
-        <p class="muted">No detector audit items available.</p>
+        <p class="muted">{emptyText}</p>
       {:else}
         {#each items as item, index}
           {@const config = item.configs[activeConfigIndex] ?? item.configs[0]}
@@ -332,13 +371,17 @@
             {#if active.imageUrl}
               <div class="detection-review-image-frame">
                 <img src={active.imageUrl} alt={`Detector audit source ${active.filename}`} on:load={handleImageLoad} />
-                {#if imageNaturalWidth > 0 && imageNaturalHeight > 0 && (selectedConfig?.detectorBoxes.length || active.truthPolygonXy || active.truthBboxXyxy || selectedConfig?.bestBox)}
+                {#if imageNaturalWidth > 0 && imageNaturalHeight > 0 && (selectedConfig?.detectorBoxes.length || selectedConfig?.productRois.length || active.truthPolygonXy || active.truthBboxXyxy || selectedConfig?.bestBox)}
                   <svg
                     class="detection-review-overlay"
                     viewBox={`0 0 ${imageNaturalWidth} ${imageNaturalHeight}`}
                     preserveAspectRatio="xMidYMid meet"
                     aria-hidden="true"
                   >
+                    {#each selectedConfig?.productRois ?? [] as roi}
+                      {@const roiRect = roiRectAttrs(roi)}
+                      <rect class="product-roi-box" x={roiRect.x} y={roiRect.y} width={roiRect.width} height={roiRect.height} />
+                    {/each}
                     {#each selectedConfig?.detectorBoxes ?? [] as box}
                       {#if box.polygonXy}
                         <polygon points={polygonPoints(box)} />
@@ -367,7 +410,12 @@
             {:else}
               <div class="recognition-empty-crop">No image</div>
             {/if}
-            <figcaption>{formatCount(selectedConfig?.boxCount)} detector boxes drawn</figcaption>
+            <figcaption>
+              {formatCount(selectedConfig?.boxCount)} detector boxes drawn
+              {#if selectedConfig?.productRoiCount !== null && selectedConfig?.productRoiCount !== undefined}
+                · {formatCount(selectedConfig.productRoiCount)} product ROIs
+              {/if}
+            </figcaption>
           </figure>
 
           <div class="recognition-winner-card">
@@ -379,6 +427,10 @@
               <dd>{selectedConfig?.verdict ? verdictLabel(selectedConfig.verdict) : '-'}</dd>
               <dt>Boxes</dt>
               <dd>{formatCount(selectedConfig?.boxCount)}</dd>
+              {#if selectedConfig?.productRoiCount !== null && selectedConfig?.productRoiCount !== undefined}
+                <dt>Product ROIs</dt>
+                <dd>{formatCount(selectedConfig.productRoiCount)}</dd>
+              {/if}
               <dt>Best IoU</dt>
               <dd>{formatDecimal(selectedConfig?.bestIou)}</dd>
               <dt>Truth Coverage</dt>
@@ -394,7 +446,7 @@
             <div class="recognition-review-title-row">
               <div>
                 <h3>Compare Detector Configs</h3>
-                <p class="muted">Switch configs without mixing in recognition results.</p>
+                <p class="muted">{configSwitchDescription}</p>
               </div>
             </div>
             <div class="detector-audit-configs">

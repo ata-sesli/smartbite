@@ -29,7 +29,8 @@ dependencies = [
 [project.optional-dependencies]
 ai = [
   "paddleocr>=2.8.1",
-  "paddlepaddle>=3.2.0,<3.3.0",
+  "paddlepaddle==3.0.0",
+  "onnxruntime>=1.18.0",
   "ultralytics>=8.2.0",
   "sahi>=0.11.36",
   "torch>=2.3.1",
@@ -39,6 +40,11 @@ ai = [
   "nltk>=3.9.0",
   "huggingface-hub>=0.31.0",
   "chardet>=5,<6",
+]
+export = [
+  "paddle2onnx>=2.0.0",
+  "onnx>=1.16,<1.18",
+  "onnxslim>=0.1.71",
 ]
 dev = [
   "pytest>=8.3.2",
@@ -50,6 +56,10 @@ dev = [
 smartbite-api = "app.main:run"
 smartbite-worker = "app.worker_main:run"
 smartbite-prefetch-models = "app.scripts.prefetch_models:main"
+smartbite-export-onnx-models = "app.scripts.export_onnx_models:main"
+smartbite-yolo-onnx-parity = "app.scripts.yolo_onnx_parity:main"
+smartbite-svtr-onnx-parity = "app.scripts.svtr_onnx_parity:main"
+smartbite-mobile-test64-upload = "app.scripts.mobile_test64_upload_benchmark:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

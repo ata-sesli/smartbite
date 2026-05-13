@@ -221,6 +221,21 @@ def test_resolve_recognizer_config_selects_svtrv2() -> None:
     assert str(config["model_dir"]).endswith("models/svtrv2/smartbite_svtrv2_expdate_rec")
 
 
+def test_resolve_recognizer_config_selects_svtrv2_onnx() -> None:
+    settings = get_settings()
+    config = resolve_recognizer_config(
+        recognizer_name="svtrv2_onnx",
+        settings=settings,
+        ppocr_rec_model_dir=None,
+        ppocr_rec_model_name=None,
+    )
+
+    assert config["recognizer"] == "svtrv2_onnx"
+    assert config["model_name"] == "svtrv2_onnx"
+    assert str(config["model_dir"]).endswith("models/svtrv2/smartbite_svtrv2_expdate_rec")
+    assert str(config["onnx_model_path"]).endswith("models/svtrv2/smartbite_svtrv2_expdate_rec_onnx/model.onnx")
+
+
 class _OriginalOnlyPreprocessor:
     def recognition_variants(self, crop: np.ndarray, allowed_names=None) -> list[ImageVariant]:
         _ = crop, allowed_names

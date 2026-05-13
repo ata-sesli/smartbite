@@ -113,6 +113,7 @@ h3 {
 
 .status-item strong {
   font-size: 0.95rem;
+  overflow-wrap: anywhere;
 }
 
 .status-item strong.up {
@@ -438,6 +439,12 @@ h3 {
   fill: rgba(37, 99, 235, 0.06);
   stroke: #2563eb;
   stroke-dasharray: 6 4;
+}
+
+.detection-review-overlay .product-roi-box {
+  fill: rgba(8, 145, 178, 0.05);
+  stroke: #0891b2;
+  stroke-width: 1.6;
 }
 
 .detection-review-overlay .best-audit-box {

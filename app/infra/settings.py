@@ -45,6 +45,8 @@ class Settings(BaseSettings):
     parser_min_candidate_confidence: float = 0.40
 
     mobile_expiry_detector_model_path: Path = Path("models/yolo26s_obb_expdate2k_ft_after_brazil/weights/best.pt")
+    mobile_expiry_detector_backend: str = "ultralytics"
+    mobile_expiry_detector_onnx_path: Path = Path("models/yolo26s_obb_expdate2k_ft_after_brazil/weights/best.onnx")
     mobile_expiry_detector_confidence_threshold: float = 0.05
     mobile_expiry_detector_imgsz: int = 1024
     mobile_expiry_max_candidates: int = 12
@@ -53,8 +55,10 @@ class Settings(BaseSettings):
     # Expiry OCR lane: PP-OCRv5 text detection + configurable final recognition.
     text_detector_mode: str = "ensemble"
     expiry_recognizer: str = "svtrv2"
+    svtrv2_rec_backend: str = "paddle"
     svtrv2_rec_model_name: str = "ch_SVTRv2_rec"
     svtrv2_rec_model_dir: Path = Path("models/svtrv2/smartbite_svtrv2_expdate_rec")
+    svtrv2_rec_onnx_path: Path = Path("models/svtrv2/smartbite_svtrv2_expdate_rec_onnx/model.onnx")
     svtrv2_device_mode: str = "cpu"
     context_probe_enabled: bool = True
     context_recognizer: str = "svtrv2"
@@ -168,6 +172,24 @@ class Settings(BaseSettings):
         normalized = value.lower().strip()
         if normalized not in valid:
             raise ValueError(f"expiry_recognizer must be one of {sorted(valid)}")
+        return normalized
+
+    @field_validator("mobile_expiry_detector_backend")
+    @classmethod
+    def validate_mobile_expiry_detector_backend(cls, value: str) -> str:
+        valid = {"ultralytics", "onnx"}
+        normalized = value.lower().strip()
+        if normalized not in valid:
+            raise ValueError(f"mobile_expiry_detector_backend must be one of {sorted(valid)}")
+        return normalized
+
+    @field_validator("svtrv2_rec_backend")
+    @classmethod
+    def validate_svtrv2_rec_backend(cls, value: str) -> str:
+        valid = {"paddle", "onnx"}
+        normalized = value.lower().strip()
+        if normalized not in valid:
+            raise ValueError(f"svtrv2_rec_backend must be one of {sorted(valid)}")
         return normalized
 
     @field_validator("context_recognizer")

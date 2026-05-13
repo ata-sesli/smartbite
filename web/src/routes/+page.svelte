@@ -20,6 +20,7 @@
     | 'cropTruth'
     | 'recognitionReview'
     | 'detectionReview'
+    | 'productCropperReview'
     | 'fullPipelineReview'
     | 'dataset'
     | 'tools';
@@ -1024,6 +1025,7 @@
     <button type="button" class:active={activeTab === 'cropTruth'} on:click={() => switchTab('cropTruth')}>Crop Truth</button>
     <button type="button" class:active={activeTab === 'recognitionReview'} on:click={() => switchTab('recognitionReview')}>Recognition Review</button>
     <button type="button" class:active={activeTab === 'detectionReview'} on:click={() => switchTab('detectionReview')}>Detection Review</button>
+    <button type="button" class:active={activeTab === 'productCropperReview'} on:click={() => switchTab('productCropperReview')}>Product Cropper</button>
     <button type="button" class:active={activeTab === 'fullPipelineReview'} on:click={() => switchTab('fullPipelineReview')}>Full Pipeline</button>
     <button type="button" class:active={activeTab === 'dataset'} on:click={() => switchTab('dataset')}>Dataset / Export</button>
     <button type="button" class:active={activeTab === 'tools'} on:click={() => switchTab('tools')}>Tools</button>
@@ -1314,6 +1316,16 @@
 
   {#if activeTab === 'detectionReview'}
     <DetectionReviewPanel />
+  {/if}
+
+  {#if activeTab === 'productCropperReview'}
+    <DetectionReviewPanel
+      endpoint="/api/test64/product-cropper-review"
+      title="Product Cropper Review"
+      description="D2S product-cropper ROIs followed by expiry detection inside the cropped product regions."
+      emptyText="No product-cropper audit items available."
+      configSwitchDescription="Inspect product-first detector configs without mixing in recognition results."
+    />
   {/if}
 
   {#if activeTab === 'fullPipelineReview'}

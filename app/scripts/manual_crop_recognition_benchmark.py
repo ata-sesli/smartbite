@@ -23,6 +23,7 @@ from app.ai.parseq import ParSeqRecognizer
 from app.ai.preprocess import ImageVariant, ROIImagePreprocessor
 from app.ai.types import ParsedDateData
 from app.ai.ocr import PPOCRV5MobileRecognizer, RecognitionData
+from app.ai.onnx_inference import SVTROnnxTextRecognizer
 from app.infra.settings import get_settings
 from app.domain.services import CROP_TRUTH_ANNOTATIONS_PATH, PROJECT_ROOT
 
@@ -135,6 +136,34 @@ class PPOCRBenchmarkRecognizer(BenchmarkRecognizer):
             "model_dir": str(self.model_dir) if self.model_dir is not None else None,
             "runtime_device": self.recognizer.runtime_device,
             "backend": "paddleocr.TextRecognition",
+            "model_loaded": info.get("model_loaded"),
+            "load_error": info.get("load_error"),
+        }
+
+
+class SVTROnnxBenchmarkRecognizer(BenchmarkRecognizer):
+    def __init__(self, recognizer: SVTROnnxTextRecognizer, *, model_dir: Path, onnx_model_path: Path) -> None:
+        self.recognizer = recognizer
+        self.model_dir = model_dir
+        self.onnx_model_path = onnx_model_path
+
+    def recognize(self, image: np.ndarray) -> RecognitionData:
+        rec = self.recognizer.recognize(image)
+        return RecognitionData(
+            raw_text=rec.raw_text,
+            normalized_text=rec.normalized_text,
+            confidence=rec.confidence,
+            reason=rec.reason,
+        )
+
+    def runtime_info(self) -> dict[str, Any]:
+        info = self.recognizer.runtime_info()
+        return {
+            "model_name": "svtrv2_onnx",
+            "model_dir": str(self.model_dir),
+            "onnx_model_path": str(self.onnx_model_path),
+            "runtime_device": self.recognizer.runtime_device,
+            "backend": "onnxruntime",
             "model_loaded": info.get("model_loaded"),
             "load_error": info.get("load_error"),
         }
@@ -355,7 +384,16 @@ def resolve_recognizer_config(
             "model_dir": ppocr_rec_model_dir or getattr(settings, "svtrv2_rec_model_dir", Path("models/svtrv2/ch_SVTRv2_rec")),
             "device_mode": getattr(settings, "svtrv2_device_mode", "cpu"),
         }
-    raise ValueError("recognizer must be one of: parseq, ppocrv5_server_rec, svtrv2")
+    if normalized in {"svtrv2_onnx", "onnx_svtrv2"}:
+        model_dir = ppocr_rec_model_dir or getattr(settings, "svtrv2_rec_model_dir", Path("models/svtrv2/ch_SVTRv2_rec"))
+        return {
+            "recognizer": "svtrv2_onnx",
+            "model_name": "svtrv2_onnx",
+            "model_dir": model_dir,
+            "onnx_model_path": getattr(settings, "svtrv2_rec_onnx_path", Path("models/svtrv2/smartbite_svtrv2_expdate_rec_onnx/model.onnx")),
+            "device_mode": getattr(settings, "svtrv2_device_mode", "cpu"),
+        }
+    raise ValueError("recognizer must be one of: parseq, ppocrv5_server_rec, svtrv2, svtrv2_onnx")
 
 
 def build_benchmark_recognizer(config: dict[str, Any]) -> BenchmarkRecognizer:
@@ -379,6 +417,18 @@ def build_benchmark_recognizer(config: dict[str, Any]) -> BenchmarkRecognizer:
             ),
             model_name=model_name,
             model_dir=model_dir,
+        )
+    if config["recognizer"] == "svtrv2_onnx":
+        model_dir = Path(config["model_dir"])
+        onnx_model_path = Path(config["onnx_model_path"])
+        return SVTROnnxBenchmarkRecognizer(
+            SVTROnnxTextRecognizer(
+                model_path=onnx_model_path,
+                paddle_model_dir=model_dir,
+                runtime_device=str(config.get("device_mode") or "cpu"),
+            ),
+            model_dir=model_dir,
+            onnx_model_path=onnx_model_path,
         )
     raise ValueError(f"unsupported recognizer: {config['recognizer']}")
 
@@ -831,7 +881,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, default=Path("artifacts/forensics"))
     parser.add_argument("--today", default=date.today().isoformat())
     parser.add_argument("--all-annotated", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--recognizer", choices=("parseq", "ppocrv5_server_rec", "svtrv2"), default="parseq")
+    parser.add_argument("--recognizer", choices=("parseq", "ppocrv5_server_rec", "svtrv2", "svtrv2_onnx"), default="parseq")
     parser.add_argument("--ppocr-rec-model-dir", type=Path, default=None)
     parser.add_argument("--ppocr-rec-model-name", default=None)
     return parser.parse_args()

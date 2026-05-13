@@ -20,9 +20,11 @@ from app.infra.storage import LocalStorage
 logger = logging.getLogger(__name__)
 
 
-def _assert_worker_ai_dependencies() -> None:
+def _assert_worker_ai_dependencies(settings: Settings) -> None:
     os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "True"
-    required_modules = ("ultralytics", "paddle", "paddleocr", "torch")
+    required_modules = ["ultralytics", "paddle", "paddleocr", "torch"]
+    if settings.mobile_expiry_detector_backend == "onnx" or settings.svtrv2_rec_backend == "onnx":
+        required_modules.append("onnxruntime")
     missing: list[str] = []
 
     for module_name in required_modules:
@@ -50,20 +52,28 @@ def build_pipeline(settings: Settings) -> MobileExpiryPipeline:
         svtr_model_dir=settings.svtrv2_rec_model_dir,
         svtr_device=settings.svtrv2_device_mode,
         parser_min_candidate_confidence=settings.parser_min_candidate_confidence,
+        detector_backend=settings.mobile_expiry_detector_backend,
+        detector_onnx_path=settings.mobile_expiry_detector_onnx_path,
+        svtr_backend=settings.svtrv2_rec_backend,
+        svtr_onnx_model_path=settings.svtrv2_rec_onnx_path,
     )
 
 
 async def startup(ctx: dict) -> None:
-    _assert_worker_ai_dependencies()
     settings = get_settings()
+    _assert_worker_ai_dependencies(settings)
     logger.info(
-        "expiry worker startup: detector_model=%s detector_conf=%s imgsz=%s max_candidates=%s recognizer=svtrv2 recognizer_model=%s recognizer_dir=%s recognizer_device=%s parser_min_conf=%s",
+        "expiry worker startup: detector_backend=%s detector_model=%s detector_onnx=%s detector_conf=%s imgsz=%s max_candidates=%s recognizer=svtrv2 recognizer_backend=%s recognizer_model=%s recognizer_dir=%s recognizer_onnx=%s recognizer_device=%s parser_min_conf=%s",
+        settings.mobile_expiry_detector_backend,
         settings.mobile_expiry_detector_model_path,
+        settings.mobile_expiry_detector_onnx_path,
         settings.mobile_expiry_detector_confidence_threshold,
         settings.mobile_expiry_detector_imgsz,
         settings.mobile_expiry_max_candidates,
+        settings.svtrv2_rec_backend,
         settings.svtrv2_rec_model_name,
         settings.svtrv2_rec_model_dir,
+        settings.svtrv2_rec_onnx_path,
         settings.svtrv2_device_mode,
         settings.parser_min_candidate_confidence,
     )

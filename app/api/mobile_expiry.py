@@ -92,6 +92,10 @@ async def _get_mobile_pipeline(request: Request) -> MobileExpiryPipeline:
             svtr_model_dir=settings.svtrv2_rec_model_dir,
             svtr_device=settings.svtrv2_device_mode,
             parser_min_candidate_confidence=settings.parser_min_candidate_confidence,
+            detector_backend=settings.mobile_expiry_detector_backend,
+            detector_onnx_path=settings.mobile_expiry_detector_onnx_path,
+            svtr_backend=settings.svtrv2_rec_backend,
+            svtr_onnx_model_path=settings.svtrv2_rec_onnx_path,
         )
         request.app.state.mobile_expiry_pipeline = pipeline
         return pipeline

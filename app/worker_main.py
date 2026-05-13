@@ -9,13 +9,13 @@ from arq.worker import Worker
 from arq.connections import RedisSettings
 
 from app.infra.settings import get_settings
-from app.workers.scan_jobs import process_general_text_ocr, process_scan, startup
+from app.workers.scan_jobs import process_scan, startup
 
 
 def run() -> None:
     settings = get_settings()
     worker = Worker(
-        functions=[process_scan, process_general_text_ocr],
+        functions=[process_scan],
         on_startup=startup,
         redis_settings=RedisSettings.from_dsn(settings.redis_url),
         job_timeout=300,

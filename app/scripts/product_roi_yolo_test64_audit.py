@@ -64,6 +64,130 @@ def _pad_bbox(
     )
 
 
+def _bbox_area(bbox: tuple[int, int, int, int]) -> int:
+    return max(0, bbox[2] - bbox[0]) * max(0, bbox[3] - bbox[1])
+
+
+def _bbox_union(boxes: list[tuple[int, int, int, int]]) -> tuple[int, int, int, int]:
+    return (
+        min(box[0] for box in boxes),
+        min(box[1] for box in boxes),
+        max(box[2] for box in boxes),
+        max(box[3] for box in boxes),
+    )
+
+
+def _bbox_iou(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> float:
+    x1 = max(a[0], b[0])
+    y1 = max(a[1], b[1])
+    x2 = min(a[2], b[2])
+    y2 = min(a[3], b[3])
+    intersection = _bbox_area((x1, y1, x2, y2))
+    if intersection <= 0:
+        return 0.0
+    union = _bbox_area(a) + _bbox_area(b) - intersection
+    return intersection / union if union > 0 else 0.0
+
+
+def _bbox_gap_ratio(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> float:
+    gap_x = max(0, max(a[0], b[0]) - min(a[2], b[2]))
+    gap_y = max(0, max(a[1], b[1]) - min(a[3], b[3]))
+    scale = max(1, max(a[2] - a[0], a[3] - a[1], b[2] - b[0], b[3] - b[1]))
+    return float((gap_x**2 + gap_y**2) ** 0.5) / scale
+
+
+def _bbox_centrality(bbox: tuple[int, int, int, int], *, image_width: int, image_height: int) -> float:
+    cx = (bbox[0] + bbox[2]) / 2.0
+    cy = (bbox[1] + bbox[3]) / 2.0
+    image_cx = image_width / 2.0
+    image_cy = image_height / 2.0
+    max_distance = max(1.0, (image_cx**2 + image_cy**2) ** 0.5)
+    distance = ((cx - image_cx) ** 2 + (cy - image_cy) ** 2) ** 0.5
+    return max(0.0, 1.0 - distance / max_distance)
+
+
+def _should_merge_rois(
+    a: ProductRoi,
+    b: ProductRoi,
+    *,
+    iou_threshold: float,
+    nearby_gap_ratio: float,
+) -> bool:
+    return _bbox_iou(a.bbox_xyxy, b.bbox_xyxy) >= iou_threshold or _bbox_gap_ratio(
+        a.bbox_xyxy,
+        b.bbox_xyxy,
+    ) <= nearby_gap_ratio
+
+
+def _merge_product_rois(
+    rois: list[ProductRoi],
+    *,
+    image_width: int,
+    image_height: int,
+    iou_threshold: float,
+    nearby_gap_ratio: float,
+) -> tuple[list[ProductRoi], dict[str, Any]]:
+    clusters: list[list[ProductRoi]] = [[roi] for roi in rois]
+    changed = True
+    while changed:
+        changed = False
+        for left_index in range(len(clusters)):
+            if changed:
+                break
+            for right_index in range(left_index + 1, len(clusters)):
+                left = clusters[left_index]
+                right = clusters[right_index]
+                if any(
+                    _should_merge_rois(
+                        left_roi,
+                        right_roi,
+                        iou_threshold=iou_threshold,
+                        nearby_gap_ratio=nearby_gap_ratio,
+                    )
+                    for left_roi in left
+                    for right_roi in right
+                ):
+                    clusters[left_index] = [*left, *right]
+                    del clusters[right_index]
+                    changed = True
+                    break
+
+    image_area = max(1, image_width * image_height)
+    scored_clusters: list[tuple[float, ProductRoi, list[ProductRoi]]] = []
+    cluster_payloads: list[dict[str, Any]] = []
+    for cluster in clusters:
+        union_bbox = _bbox_union([roi.bbox_xyxy for roi in cluster])
+        area_ratio = _bbox_area(union_bbox) / image_area
+        centrality = _bbox_centrality(union_bbox, image_width=image_width, image_height=image_height)
+        confidence = max(roi.confidence for roi in cluster)
+        score = (area_ratio * 0.65) + (centrality * 0.25) + (confidence * 0.10)
+        merged_roi = ProductRoi(union_bbox, confidence, "product_yolo_obb_merged")
+        scored_clusters.append((score, merged_roi, cluster))
+        cluster_payloads.append(
+            {
+                "bbox_xyxy": list(union_bbox),
+                "score": score,
+                "area_ratio": area_ratio,
+                "centrality": centrality,
+                "confidence": confidence,
+                "member_count": len(cluster),
+                "members": [
+                    {"bbox_xyxy": list(roi.bbox_xyxy), "confidence": roi.confidence, "source": roi.source}
+                    for roi in cluster
+                ],
+            }
+        )
+
+    scored_clusters.sort(key=lambda item: item[0], reverse=True)
+    selected = [scored_clusters[0][1]] if scored_clusters else []
+    return selected, {
+        "product_roi_merge_enabled": True,
+        "raw_product_roi_count": len(rois),
+        "product_roi_cluster_count": len(clusters),
+        "product_roi_clusters": sorted(cluster_payloads, key=lambda item: float(item["score"]), reverse=True),
+    }
+
+
 class ProductThenExpiryYoloDetector:
     def __init__(
         self,
@@ -73,6 +197,9 @@ class ProductThenExpiryYoloDetector:
         product_top_k: int,
         product_padding_ratio: float,
         product_imgsz: int,
+        merge_product_rois: bool,
+        product_merge_iou_threshold: float,
+        product_merge_nearby_gap_ratio: float,
         expiry_model_path: Path,
         expiry_conf: float,
         expiry_imgsz: int,
@@ -83,6 +210,9 @@ class ProductThenExpiryYoloDetector:
         self.product_top_k = product_top_k
         self.product_padding_ratio = product_padding_ratio
         self.product_imgsz = product_imgsz
+        self.merge_product_rois = merge_product_rois
+        self.product_merge_iou_threshold = product_merge_iou_threshold
+        self.product_merge_nearby_gap_ratio = product_merge_nearby_gap_ratio
         self.expiry_model_path = expiry_model_path
         self.expiry_conf = expiry_conf
         self.expiry_imgsz = expiry_imgsz
@@ -104,16 +234,74 @@ class ProductThenExpiryYoloDetector:
                 self._expiry_model = YOLO(str(self.expiry_model_path))
         return self._product_model, self._expiry_model
 
-    def _detect_products(self, image: np.ndarray) -> list[ProductRoi]:
+    def _select_product_rois(self, rois: list[ProductRoi], image: np.ndarray) -> tuple[list[ProductRoi], dict[str, Any]]:
+        if not self.merge_product_rois:
+            return rois, {
+                "product_roi_merge_enabled": False,
+                "raw_product_roi_count": len(rois),
+                "product_roi_cluster_count": None,
+                "product_roi_clusters": [],
+            }
+        height, width = image.shape[:2]
+        return _merge_product_rois(
+            rois,
+            image_width=width,
+            image_height=height,
+            iou_threshold=self.product_merge_iou_threshold,
+            nearby_gap_ratio=self.product_merge_nearby_gap_ratio,
+        )
+
+    def _detect_products(self, image: np.ndarray) -> tuple[list[ProductRoi], dict[str, Any]]:
         product_model, _ = self._ensure_models()
         results = product_model.predict(image, conf=self.product_conf, imgsz=self.product_imgsz, verbose=False)
         if not results:
-            return []
-        boxes_raw = getattr(results[0], "boxes", None)
-        if boxes_raw is None or len(boxes_raw) == 0:
-            return []
+            return [], {
+                "product_roi_merge_enabled": self.merge_product_rois,
+                "raw_product_roi_count": 0,
+                "product_roi_cluster_count": 0 if self.merge_product_rois else None,
+                "product_roi_clusters": [],
+            }
         height, width = image.shape[:2]
         rois: list[ProductRoi] = []
+
+        obb_raw = getattr(results[0], "obb", None)
+        if obb_raw is not None and len(obb_raw) > 0:
+            polys_raw = getattr(obb_raw, "xyxyxyxy", None)
+            conf_raw = getattr(obb_raw, "conf", None)
+            if polys_raw is not None and conf_raw is not None:
+                polygons = polys_raw.cpu().numpy().tolist()
+                confidences = conf_raw.cpu().numpy().tolist()
+                for polygon, confidence in zip(polygons, confidences, strict=False):
+                    confidence_float = float(confidence)
+                    if confidence_float < self.product_conf:
+                        continue
+                    raw_bbox_list = _xyxy_from_polygon([[float(x), float(y)] for x, y in polygon])
+                    clipped_bbox = (
+                        max(0, min(width, int(raw_bbox_list[0]))),
+                        max(0, min(height, int(raw_bbox_list[1]))),
+                        max(0, min(width, int(raw_bbox_list[2]))),
+                        max(0, min(height, int(raw_bbox_list[3]))),
+                    )
+                    padded_bbox = _pad_bbox(
+                        clipped_bbox,
+                        image_width=width,
+                        image_height=height,
+                        padding_ratio=self.product_padding_ratio,
+                    )
+                    if padded_bbox[2] <= padded_bbox[0] or padded_bbox[3] <= padded_bbox[1]:
+                        continue
+                    rois.append(ProductRoi(padded_bbox, confidence_float, "product_yolo_obb"))
+                rois.sort(key=lambda roi: roi.confidence, reverse=True)
+                return self._select_product_rois(rois[: self.product_top_k], image)
+
+        boxes_raw = getattr(results[0], "boxes", None)
+        if boxes_raw is None or len(boxes_raw) == 0:
+            return [], {
+                "product_roi_merge_enabled": self.merge_product_rois,
+                "raw_product_roi_count": 0,
+                "product_roi_cluster_count": 0 if self.merge_product_rois else None,
+                "product_roi_clusters": [],
+            }
         for row in boxes_raw:
             confidence = float(row.conf.item())
             if confidence < self.product_conf:
@@ -135,7 +323,7 @@ class ProductThenExpiryYoloDetector:
                 continue
             rois.append(ProductRoi(padded_bbox, confidence, "product_yolo"))
         rois.sort(key=lambda roi: roi.confidence, reverse=True)
-        return rois[: self.product_top_k]
+        return self._select_product_rois(rois[: self.product_top_k], image)
 
     def _detect_expiry_in_roi(self, image: np.ndarray, roi: ProductRoi) -> list[dict[str, Any]]:
         _, expiry_model = self._ensure_models()
@@ -183,7 +371,7 @@ class ProductThenExpiryYoloDetector:
         return boxes
 
     def detect(self, image: np.ndarray) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-        product_rois = self._detect_products(image)
+        product_rois, product_meta = self._detect_products(image)
         boxes: list[dict[str, Any]] = []
         for roi in product_rois:
             boxes.extend(self._detect_expiry_in_roi(image, roi))
@@ -199,6 +387,7 @@ class ProductThenExpiryYoloDetector:
                 for roi in product_rois
             ],
             "detector_unavailable_reasons": [],
+            **product_meta,
         }
 
 
@@ -262,6 +451,9 @@ async def main_async(args: argparse.Namespace) -> int:
         product_top_k=args.product_top_k,
         product_padding_ratio=args.product_padding_ratio,
         product_imgsz=args.product_imgsz,
+        merge_product_rois=args.merge_product_rois,
+        product_merge_iou_threshold=args.product_merge_iou_threshold,
+        product_merge_nearby_gap_ratio=args.product_merge_nearby_gap_ratio,
         expiry_model_path=Path(args.expiry_model_path),
         expiry_conf=args.expiry_conf,
         expiry_imgsz=args.expiry_imgsz,
@@ -320,6 +512,9 @@ async def main_async(args: argparse.Namespace) -> int:
                     "product_top_k": args.product_top_k,
                     "product_padding_ratio": args.product_padding_ratio,
                     "product_imgsz": args.product_imgsz,
+                    "merge_product_rois": args.merge_product_rois,
+                    "product_merge_iou_threshold": args.product_merge_iou_threshold,
+                    "product_merge_nearby_gap_ratio": args.product_merge_nearby_gap_ratio,
                     "expiry_model_path": str(Path(args.expiry_model_path)),
                     "expiry_confidence_threshold": args.expiry_conf,
                     "expiry_imgsz": args.expiry_imgsz,
@@ -355,6 +550,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--product-top-k", type=int, default=4)
     parser.add_argument("--product-padding-ratio", type=float, default=0.12)
     parser.add_argument("--product-imgsz", type=int, default=1024)
+    parser.add_argument(
+        "--merge-product-rois",
+        action="store_true",
+        help="Merge nearby/overlapping top product ROIs and keep one large central product crop.",
+    )
+    parser.add_argument("--product-merge-iou-threshold", type=float, default=0.01)
+    parser.add_argument("--product-merge-nearby-gap-ratio", type=float, default=0.25)
     parser.add_argument("--expiry-model-path", default=str(DEFAULT_YOLO_OBB_MODEL_PATH))
     parser.add_argument("--expiry-conf", type=float, default=0.01)
     parser.add_argument("--expiry-imgsz", type=int, default=1024)

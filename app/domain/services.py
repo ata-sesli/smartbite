@@ -365,6 +365,27 @@ class ScanService:
             ],
         }
 
+    async def get_test64_product_cropper_review(self) -> dict[str, Any]:
+        detector_audit = self._latest_test64_product_cropper_audit_payload()
+        items = detector_audit.get("items") if isinstance(detector_audit.get("items"), list) else []
+        truth_manifest = self._read_truth_bbox_manifest_payload()
+        truth_items = truth_manifest.get("items") if isinstance(truth_manifest.get("items"), dict) else {}
+        return {
+            "run_id": detector_audit.get("run_id"),
+            "report_path": detector_audit.get("report_path"),
+            "generated_at": detector_audit.get("generated_at"),
+            "source": detector_audit.get("source"),
+            "summary": detector_audit.get("summary") if isinstance(detector_audit.get("summary"), dict) else {},
+            "configs": detector_audit.get("configs") if isinstance(detector_audit.get("configs"), list) else [],
+            "total_items": len(items),
+            "filtered_count": len(items),
+            "items": [
+                self._test64_detector_audit_review_item(item, truth_items=truth_items)
+                for item in items
+                if isinstance(item, dict)
+            ],
+        }
+
     async def get_test64_full_pipeline_review(self) -> dict[str, Any]:
         report_path = self._latest_test64_detection_review_report_path()
         report = self._read_test64_detection_review_report(report_path)
@@ -555,6 +576,36 @@ class ScanService:
             "report_path": str(report_path),
             "generated_at": payload.get("generated_at"),
             "source": payload.get("source"),
+            "summary": payload.get("summary") if isinstance(payload.get("summary"), dict) else {},
+            "configs": payload.get("configs") if isinstance(payload.get("configs"), list) else [],
+            "items": payload.get("items") if isinstance(payload.get("items"), list) else [],
+        }
+
+    @staticmethod
+    def _latest_test64_product_cropper_audit_payload() -> dict[str, Any]:
+        if not TEST64_DETECTION_REVIEW_ARTIFACTS_DIR.exists():
+            return {}
+        reports = sorted(
+            TEST64_DETECTION_REVIEW_ARTIFACTS_DIR.glob(
+                "test64_product_roi_yolo_audit_*/product_roi_yolo_test64_report.json"
+            ),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        if not reports:
+            return {}
+        report_path = reports[0]
+        try:
+            payload = json.loads(report_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return {}
+        if not isinstance(payload, dict):
+            return {}
+        return {
+            "run_id": report_path.parent.name,
+            "report_path": str(report_path),
+            "generated_at": payload.get("generated_at"),
+            "source": payload.get("source") or payload.get("backend"),
             "summary": payload.get("summary") if isinstance(payload.get("summary"), dict) else {},
             "configs": payload.get("configs") if isinstance(payload.get("configs"), list) else [],
             "items": payload.get("items") if isinstance(payload.get("items"), list) else [],

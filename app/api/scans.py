@@ -239,6 +239,17 @@ async def get_test64_detection_review(request: Request, session: AsyncSession) -
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@get("/test64/product-cropper-review")
+async def get_test64_product_cropper_review(request: Request, session: AsyncSession) -> dict[str, object]:
+    service = _scan_service(request, session)
+    try:
+        return await service.get_test64_product_cropper_review()
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @get("/test64/full-pipeline-review")
 async def get_test64_full_pipeline_review(request: Request, session: AsyncSession) -> dict[str, object]:
     service = _scan_service(request, session)
