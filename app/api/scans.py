@@ -261,6 +261,17 @@ async def get_test64_full_pipeline_review(request: Request, session: AsyncSessio
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@get("/test64/full-pipeline-results")
+async def get_test64_full_pipeline_results(request: Request, session: AsyncSession) -> dict[str, object]:
+    service = _scan_service(request, session)
+    try:
+        return await service.get_test64_full_pipeline_results()
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @get("/test64/manual-crop-recognition-review/assets")
 async def get_manual_crop_recognition_review_asset(
     request: Request,

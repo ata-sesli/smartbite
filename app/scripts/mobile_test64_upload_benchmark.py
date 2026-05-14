@@ -164,6 +164,12 @@ async def main_async(args: argparse.Namespace) -> int:
                 "normalized_text": payload.get("normalized_text") if isinstance(payload, dict) else None,
                 "recognition_confidence": payload.get("recognition_confidence") if isinstance(payload, dict) else None,
                 "detector_confidence": payload.get("detector_confidence") if isinstance(payload, dict) else None,
+                "final_recognition_bbox_xyxy": payload.get("final_recognition_bbox_xyxy") if isinstance(payload, dict) else None,
+                "final_recognition_polygon_json": (
+                    payload.get("final_recognition_polygon_json") if isinstance(payload, dict) else None
+                ),
+                "final_crop_policy": payload.get("final_crop_policy") if isinstance(payload, dict) else None,
+                "final_crop_padding_px": payload.get("final_crop_padding_px") if isinstance(payload, dict) else None,
                 "reason": payload.get("reason") if isinstance(payload, dict) else error,
             }
             rows.append(row)

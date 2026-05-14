@@ -28,6 +28,7 @@ from app.ai.date_role import (
 )
 from app.ai.decision import ExpiryDecisionEngine
 from app.ai.detector import ExpiryRegionDetector
+from app.ai.expiry_candidate_engine import ExpiryCandidateEngine, ProposalBox, RankedExpiryCandidate
 from app.ai.ocr import OCRRouter, RecognitionData, TextDetectionBox
 from app.ai.parser import ExpiryDateParser
 from app.ai.preprocess import ImageVariant, ROIImagePreprocessor
@@ -408,6 +409,13 @@ class ExpiryPipeline:
         self.context_probe_enabled = bool(context_probe_enabled)
         self.context_max_boxes_per_candidate = max(0, int(context_max_boxes_per_candidate))
         self.context_max_candidates_per_scan = max(0, int(context_max_candidates_per_scan))
+        self.candidate_engine = ExpiryCandidateEngine(
+            max_group_candidates_per_roi=self.max_group_candidates_per_roi,
+            geometry_top_n=self.expiry_filter_geometry_top_n,
+            context_probe_enabled=self.context_probe_enabled,
+            context_max_boxes_per_candidate=self.context_max_boxes_per_candidate,
+            require_multiline_for_line_candidates=True,
+        )
 
     def run(self, image_bytes: bytes, *, today: date) -> PipelineRunOutput:
         run_start = perf_counter()
@@ -2163,125 +2171,50 @@ class ExpiryPipeline:
         return self._is_generic_brand_text(text)
 
     def _build_ranked_candidates(self, image: np.ndarray, boxes: list[TextDetectionBox]) -> list[RankedCandidate]:
-        h, w = image.shape[:2]
-        if h <= 0 or w <= 0:
-            return []
-
-        if not boxes:
-            area_ratio = 1.0
-            return [
-                RankedCandidate(
-                    candidate_id="fallback_full",
-                    candidate_type="fallback",
-                    bbox=(0, 0, w, h),
-                    member_indices=[],
-                    member_bboxes=[],
-                    detector_sources=("fallback",),
-                    detector_variant=None,
-                    geometry_features={
-                        "area_ratio": area_ratio,
-                        "aspect_ratio": float(w) / float(max(h, 1)),
-                        "line_likeness": 0.15,
-                        "edge_proximity": 0.0,
-                        "neighbor_count": 0.0,
-                    },
-                    geometry_score=0.05,
-                    score_breakdown={"fallback_bonus": 0.05},
-                    total_score=0.05,
+        self.candidate_engine.max_group_candidates_per_roi = self.max_group_candidates_per_roi
+        self.candidate_engine.geometry_top_n = self.expiry_filter_geometry_top_n
+        self.candidate_engine.context_probe_enabled = self.context_probe_enabled
+        self.candidate_engine.context_max_boxes_per_candidate = self.context_max_boxes_per_candidate
+        self.candidate_engine.require_multiline_for_line_candidates = True
+        engine_candidates = self.candidate_engine.build_ranked_candidates(
+            image,
+            [
+                ProposalBox(
+                    bbox_xyxy=box.bbox_xyxy,
+                    confidence=box.confidence,
+                    source=box.source,
+                    sources=box.sources,
+                    variant_name=box.variant_name,
+                    polygon_xy=box.polygon_xy,
                 )
-            ]
+                for box in boxes
+            ],
+        )
+        return [self._ranked_candidate_from_engine(candidate) for candidate in engine_candidates]
 
-        neighbor_counts = self._neighbor_counts(boxes)
-
-        candidates: list[RankedCandidate] = []
-        seen: set[tuple[int, int, int, int, tuple[int, ...]]] = set()
-
-        for idx, box in enumerate(boxes):
-            bbox = (box.x1, box.y1, box.x2, box.y2)
-            candidate = self._candidate_from_bbox(
-                bbox=bbox,
-                member_indices=[idx],
-                candidate_type="single",
-                image_shape=(h, w),
-                boxes=boxes,
-                neighbor_counts=neighbor_counts,
-            )
-            key = (*bbox, tuple(candidate.member_indices))
-            if key in seen:
-                continue
-            seen.add(key)
-            candidates.append(candidate)
-
-        line_clusters = self._cluster_boxes_into_lines(boxes)
-        if len(line_clusters) > 1:
-            multiline_source_id = "multiline_block_1"
-            for line_index, member_indices in enumerate(line_clusters):
-                if len(member_indices) < 2:
-                    continue
-                bbox = self._union_many_bboxes(
-                    [(boxes[idx].x1, boxes[idx].y1, boxes[idx].x2, boxes[idx].y2) for idx in member_indices]
-                )
-                candidate = self._candidate_from_bbox(
-                    bbox=bbox,
-                    member_indices=member_indices,
-                    candidate_type="line",
-                    image_shape=(h, w),
-                    boxes=boxes,
-                    neighbor_counts=neighbor_counts,
-                )
-                candidate.multiline_split_source_id = multiline_source_id
-                candidate.line_index_in_group = line_index
-                key = (*bbox, tuple(candidate.member_indices))
-                if key in seen:
-                    continue
-                seen.add(key)
-                candidates.append(candidate)
-
-        group_count = 0
-        for i in range(len(boxes)):
-            if self.max_group_candidates_per_roi <= 0 or group_count >= self.max_group_candidates_per_roi:
-                break
-            if not self._box_has_grouping_geometry(boxes[i], image_shape=(h, w)):
-                continue
-            neighbors = [
-                (
-                    self._box_center_distance(boxes[i], boxes[j]),
-                    j,
-                )
-                for j in range(len(boxes))
-                if j != i and self._box_has_grouping_geometry(boxes[j], image_shape=(h, w))
-            ]
-            neighbors.sort(key=lambda item: item[0])
-            for _distance, j in neighbors[:2]:
-                if i >= j:
-                    continue
-                if not self._boxes_are_groupable(boxes[i], boxes[j]):
-                    continue
-                bbox = self._union_bbox(
-                    (boxes[i].x1, boxes[i].y1, boxes[i].x2, boxes[i].y2),
-                    (boxes[j].x1, boxes[j].y1, boxes[j].x2, boxes[j].y2),
-                )
-                candidate = self._candidate_from_bbox(
-                    bbox=bbox,
-                    member_indices=[i, j],
-                    candidate_type="group",
-                    image_shape=(h, w),
-                    boxes=boxes,
-                    neighbor_counts=neighbor_counts,
-                )
-                key = (*bbox, tuple(candidate.member_indices))
-                if key in seen:
-                    continue
-                seen.add(key)
-                candidates.append(candidate)
-                group_count += 1
-                if group_count >= self.max_group_candidates_per_roi:
-                    break
-
-        candidates.sort(key=lambda c: c.geometry_score, reverse=True)
-        for idx, candidate in enumerate(candidates, start=1):
-            candidate.candidate_id = f"cand_{idx}"
-        return candidates
+    @staticmethod
+    def _ranked_candidate_from_engine(candidate: RankedExpiryCandidate) -> RankedCandidate:
+        return RankedCandidate(
+            candidate_id=candidate.candidate_id,
+            candidate_type=candidate.candidate_type,
+            bbox=candidate.bbox_xyxy,
+            member_indices=candidate.member_indices,
+            member_bboxes=candidate.member_bboxes,
+            detector_sources=candidate.detector_sources,
+            detector_variant=candidate.detector_variant,
+            geometry_features=candidate.geometry_features,
+            geometry_score=candidate.geometry_score,
+            score_breakdown=dict(candidate.score_breakdown),
+            recognition_bbox=candidate.recognition_bbox,
+            evidence_bbox=candidate.evidence_bbox,
+            polygon_xy=candidate.polygon_xy,
+            total_score=candidate.total_score,
+            context_probe_bboxes=list(candidate.context_probe_bboxes),
+            context_probe_indices=list(candidate.context_probe_indices),
+            keyword_relation=candidate.keyword_relation,
+            multiline_split_source_id=candidate.multiline_split_source_id,
+            line_index_in_group=candidate.line_index_in_group,
+        )
 
     @staticmethod
     def _cluster_boxes_into_lines(boxes: list[TextDetectionBox]) -> list[list[int]]:
@@ -2862,33 +2795,10 @@ class ExpiryPipeline:
 
     @classmethod
     def _build_parse_inputs(cls, ocr: OCRResultData) -> list[str]:
-        base = cls._normalize_ocr_confusions(ocr.normalized_text or "")
-        raw = cls._normalize_ocr_confusions(ocr.raw_text or "")
-        inputs: list[str] = []
-        seen: set[str] = set()
-
-        def add(value: str) -> None:
-            normalized = " ".join(value.strip().upper().split())
-            if not normalized or normalized in seen:
-                return
-            seen.add(normalized)
-            inputs.append(normalized)
-
-        add(base)
-        for line in raw.splitlines():
-            if any(ch.isdigit() for ch in line):
-                add(line)
-        tokens = [t for t in raw.split() if any(ch.isdigit() for ch in t)]
-        for token in tokens:
-            if any(sep in token for sep in ("/", "-", ".")):
-                add(token)
-
-        for index in range(len(tokens) - 1):
-            add(f"{tokens[index]} {tokens[index + 1]}")
-        for index in range(len(tokens) - 2):
-            add(f"{tokens[index]} {tokens[index + 1]} {tokens[index + 2]}")
-
-        return inputs or ([base] if base else [raw])
+        return ExpiryCandidateEngine.build_parse_inputs_from_text(
+            raw_text=ocr.raw_text or "",
+            normalized_text=ocr.normalized_text or "",
+        )
 
     def _best_parse_for_inputs(self, parse_inputs: list[str], *, today: date) -> ParsedDateData:
         parsed_inputs: list[tuple[str, ParsedDateData]] = []
@@ -2906,12 +2816,7 @@ class ExpiryPipeline:
 
     @staticmethod
     def _parse_input_selection_key(text: str, parsed: ParsedDateData) -> tuple[int, int, int, int, float]:
-        return role_selection_key(
-            evidence=score_date_role(text),
-            parsed_date=parsed.parsed_date,
-            specificity=1,
-            confidence=parsed.confidence,
-        )
+        return ExpiryCandidateEngine.parse_input_selection_key(text, parsed)
 
     def _build_debug_artifacts(
         self,

@@ -37,6 +37,7 @@ ai = [
   "craft-detector>=0.2.1",
   "timm>=1.0.20",
   "pytorch-lightning>=2.5.0",
+  "rapidocr>=3.8.1",
   "nltk>=3.9.0",
   "huggingface-hub>=0.31.0",
   "chardet>=5,<6",

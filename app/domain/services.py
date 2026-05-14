@@ -54,6 +54,7 @@ CROP_TRUTH_ANNOTATIONS_PATH = Path.cwd() / "artifacts" / "forensics" / "crop_tru
 CROP_TRUTH_COORDINATE_SPACE = "original_image_xyxy"
 MANUAL_CROP_RECOGNITION_ARTIFACTS_DIR = Path.cwd() / "artifacts" / "forensics"
 TEST64_DETECTION_REVIEW_ARTIFACTS_DIR = Path.cwd() / "artifacts" / "forensics"
+TEST64_MOBILE_UPLOAD_ARTIFACTS_DIR = Path.cwd() / "artifacts" / "onnx_parity"
 
 
 class ValidationError(ValueError):
@@ -419,6 +420,32 @@ class ScanService:
             "items": items,
         }
 
+    async def get_test64_full_pipeline_results(self) -> dict[str, Any]:
+        report_path = self._latest_test64_mobile_upload_report_path()
+        report = self._read_test64_mobile_upload_report(report_path)
+        rows = report.get("rows") if isinstance(report.get("rows"), list) else []
+        summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+        return {
+            "run_id": report_path.parent.name,
+            "report_path": str(report_path),
+            "source": "mobile-upload-benchmark",
+            "base_url": report.get("base_url"),
+            "endpoint": report.get("endpoint"),
+            "images_dir": report.get("images_dir"),
+            "created_at": report.get("created_at"),
+            "summary": summary,
+            "latency": summary.get("latency") if isinstance(summary.get("latency"), dict) else {},
+            "total_items": len(rows),
+            "filtered_count": len(rows),
+            "wrong_dates": report.get("wrong_dates") if isinstance(report.get("wrong_dates"), list) else [],
+            "manual_review": report.get("manual_review") if isinstance(report.get("manual_review"), list) else [],
+            "items": [
+                self._test64_mobile_full_pipeline_item(item)
+                for item in rows
+                if isinstance(item, dict)
+            ],
+        }
+
     def get_manual_crop_recognition_asset_path(self, *, run_id: str, relative_path: str) -> Path:
         run_dir = self._manual_crop_run_dir(run_id)
         if not relative_path or Path(relative_path).is_absolute():
@@ -514,6 +541,23 @@ class ScanService:
         if not reports:
             raise FileNotFoundError(
                 f"test64 detection review report not found under {TEST64_DETECTION_REVIEW_ARTIFACTS_DIR}"
+            )
+        return reports[0]
+
+    @staticmethod
+    def _latest_test64_mobile_upload_report_path() -> Path:
+        if not TEST64_MOBILE_UPLOAD_ARTIFACTS_DIR.exists():
+            raise FileNotFoundError(
+                f"test64 mobile upload artifacts not found: {TEST64_MOBILE_UPLOAD_ARTIFACTS_DIR}"
+            )
+        reports = sorted(
+            TEST64_MOBILE_UPLOAD_ARTIFACTS_DIR.glob("test64_mobile*upload_*/mobile_test64_upload_report.json"),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        if not reports:
+            raise FileNotFoundError(
+                f"test64 mobile upload report not found under {TEST64_MOBILE_UPLOAD_ARTIFACTS_DIR}"
             )
         return reports[0]
 
@@ -630,6 +674,60 @@ class ScanService:
         if not isinstance(payload, dict):
             raise ValidationError("test64 detection review report must be a JSON object")
         return payload
+
+    @staticmethod
+    def _read_test64_mobile_upload_report(report_path: Path) -> dict[str, Any]:
+        try:
+            payload = json.loads(report_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValidationError(f"test64 mobile upload report is invalid JSON: {report_path}") from exc
+        if not isinstance(payload, dict):
+            raise ValidationError("test64 mobile upload report must be a JSON object")
+        return payload
+
+    @staticmethod
+    def _test64_mobile_full_pipeline_item(row: dict[str, Any]) -> dict[str, Any]:
+        filename = row.get("filename")
+        response_status = row.get("response_status")
+        detected_date = row.get("detected_expiry_date")
+        if row.get("exact_match") is True:
+            verdict = "correct_match"
+        elif response_status == "parsed_success" and detected_date:
+            verdict = "wrong_date"
+        elif response_status == "manual_review_required":
+            verdict = "manual_review"
+        elif row.get("http_status") != 201:
+            verdict = "http_error"
+        else:
+            verdict = "failed"
+        return {
+            "filename": filename,
+            "image_url": f"/test64/images/{quote(str(filename))}" if filename else None,
+            "verdict": verdict,
+            "expected_date": row.get("expected_date"),
+            "expected_precision": row.get("expected_precision"),
+            "expected_day": row.get("expected_day"),
+            "expected_month": row.get("expected_month"),
+            "expected_year": row.get("expected_year"),
+            "predicted_date": detected_date,
+            "detected_expiry_date": detected_date,
+            "exact_match": row.get("exact_match"),
+            "http_status": row.get("http_status"),
+            "final_status": response_status,
+            "response_status": response_status,
+            "raw_text": row.get("raw_text"),
+            "normalized_text": row.get("normalized_text"),
+            "recognition_confidence": row.get("recognition_confidence"),
+            "detector_confidence": row.get("detector_confidence"),
+            "final_recognition_bbox_xyxy": row.get("final_recognition_bbox_xyxy"),
+            "final_recognition_polygon_json": row.get("final_recognition_polygon_json"),
+            "final_crop_policy": row.get("final_crop_policy"),
+            "final_crop_padding_px": row.get("final_crop_padding_px"),
+            "reason": row.get("reason"),
+            "runtime_ms": row.get("latency_ms"),
+            "latency_ms": row.get("latency_ms"),
+            "raw": row,
+        }
 
     @staticmethod
     def _test64_detection_review_item(scan: dict[str, Any], detector: dict[str, Any] | None) -> dict[str, Any]:

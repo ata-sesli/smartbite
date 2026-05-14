@@ -103,6 +103,10 @@ class MobileExpiryScanResponse(BaseModel):
     recognition_confidence: float | None = None
     detector_confidence: float | None = None
     reason: str | None = None
+    final_recognition_bbox_xyxy: list[int] | None = None
+    final_recognition_polygon_json: list[list[float]] | None = None
+    final_crop_policy: str | None = None
+    final_crop_padding_px: int | None = None
     created_at: datetime
 
 

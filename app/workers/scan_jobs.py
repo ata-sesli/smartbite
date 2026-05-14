@@ -25,6 +25,11 @@ def _assert_worker_ai_dependencies(settings: Settings) -> None:
     required_modules = ["ultralytics", "paddle", "paddleocr", "torch"]
     if settings.mobile_expiry_detector_backend == "onnx" or settings.svtrv2_rec_backend == "onnx":
         required_modules.append("onnxruntime")
+    if (
+        settings.mobile_proposal_rescue_backend == "rapidocr_ppocrv5"
+        and (settings.mobile_rapidocr_primary_enabled or settings.mobile_rapidocr_rescue_enabled)
+    ):
+        required_modules.append("rapidocr")
     missing: list[str] = []
 
     for module_name in required_modules:
@@ -56,6 +61,22 @@ def build_pipeline(settings: Settings) -> MobileExpiryPipeline:
         detector_onnx_path=settings.mobile_expiry_detector_onnx_path,
         svtr_backend=settings.svtrv2_rec_backend,
         svtr_onnx_model_path=settings.svtrv2_rec_onnx_path,
+        proposal_rescue_backend=settings.mobile_proposal_rescue_backend,
+        rapidocr_primary_enabled=settings.mobile_rapidocr_primary_enabled,
+        rapidocr_rescue_enabled=settings.mobile_rapidocr_rescue_enabled,
+        rapidocr_ocr_version=settings.mobile_rapidocr_ocr_version,
+        rapidocr_model_type=settings.mobile_rapidocr_model_type,
+        rapidocr_lang_type=settings.mobile_rapidocr_lang_type,
+        rapidocr_limit_side_len=settings.mobile_rapidocr_limit_side_len,
+        rapidocr_limit_type=settings.mobile_rapidocr_limit_type,
+        rapidocr_max_candidates=settings.mobile_rapidocr_max_candidates,
+        rapidocr_primary_max_rois_per_scan=settings.mobile_rapidocr_primary_max_rois_per_scan,
+        rapidocr_primary_max_boxes_accepted=settings.mobile_rapidocr_primary_max_boxes_accepted,
+        rapidocr_primary_timeout_seconds=settings.mobile_rapidocr_primary_timeout_seconds,
+        rapidocr_max_rois_per_scan=settings.mobile_rapidocr_max_rois_per_scan,
+        rapidocr_max_boxes_accepted=settings.mobile_rapidocr_max_boxes_accepted,
+        rapidocr_timeout_seconds=settings.mobile_rapidocr_timeout_seconds,
+        rapidocr_min_confidence=settings.mobile_rapidocr_min_confidence,
     )
 
 

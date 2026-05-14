@@ -11,7 +11,7 @@ from litestar.datastructures import UploadFile
 from litestar.exceptions import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ai.mobile_expiry_pipeline import MobileExpiryPipeline
+from app.ai.mobile_expiry_pipeline import MobileExpiryPipeline, MobileExpiryPipelineResult
 from app.domain.repositories import DomainRepository, MobileExpiryScanCreateData
 from app.domain.schemas import MobileExpiryCorrectionRequest, MobileExpiryScanResponse
 from app.infra.settings import get_settings
@@ -51,7 +51,7 @@ def _validate_upload(*, image_bytes: bytes, filename: str, content_type: str) ->
         raise HTTPException(status_code=400, detail="unsupported file extension")
 
 
-def _response(row) -> MobileExpiryScanResponse:
+def _response(row, *, pipeline_result: MobileExpiryPipelineResult | None = None) -> MobileExpiryScanResponse:
     return MobileExpiryScanResponse(
         id=row.id,
         status=row.status,
@@ -63,6 +63,14 @@ def _response(row) -> MobileExpiryScanResponse:
         recognition_confidence=row.recognition_confidence,
         detector_confidence=row.detector_confidence,
         reason=row.reason,
+        final_recognition_bbox_xyxy=(
+            pipeline_result.final_recognition_bbox_xyxy if pipeline_result is not None else None
+        ),
+        final_recognition_polygon_json=(
+            pipeline_result.final_recognition_polygon_json if pipeline_result is not None else None
+        ),
+        final_crop_policy=pipeline_result.final_crop_policy if pipeline_result is not None else None,
+        final_crop_padding_px=pipeline_result.final_crop_padding_px if pipeline_result is not None else None,
         created_at=row.created_at,
     )
 
@@ -96,6 +104,22 @@ async def _get_mobile_pipeline(request: Request) -> MobileExpiryPipeline:
             detector_onnx_path=settings.mobile_expiry_detector_onnx_path,
             svtr_backend=settings.svtrv2_rec_backend,
             svtr_onnx_model_path=settings.svtrv2_rec_onnx_path,
+            proposal_rescue_backend=settings.mobile_proposal_rescue_backend,
+            rapidocr_primary_enabled=settings.mobile_rapidocr_primary_enabled,
+            rapidocr_rescue_enabled=settings.mobile_rapidocr_rescue_enabled,
+            rapidocr_ocr_version=settings.mobile_rapidocr_ocr_version,
+            rapidocr_model_type=settings.mobile_rapidocr_model_type,
+            rapidocr_lang_type=settings.mobile_rapidocr_lang_type,
+            rapidocr_limit_side_len=settings.mobile_rapidocr_limit_side_len,
+            rapidocr_limit_type=settings.mobile_rapidocr_limit_type,
+            rapidocr_max_candidates=settings.mobile_rapidocr_max_candidates,
+            rapidocr_primary_max_rois_per_scan=settings.mobile_rapidocr_primary_max_rois_per_scan,
+            rapidocr_primary_max_boxes_accepted=settings.mobile_rapidocr_primary_max_boxes_accepted,
+            rapidocr_primary_timeout_seconds=settings.mobile_rapidocr_primary_timeout_seconds,
+            rapidocr_max_rois_per_scan=settings.mobile_rapidocr_max_rois_per_scan,
+            rapidocr_max_boxes_accepted=settings.mobile_rapidocr_max_boxes_accepted,
+            rapidocr_timeout_seconds=settings.mobile_rapidocr_timeout_seconds,
+            rapidocr_min_confidence=settings.mobile_rapidocr_min_confidence,
         )
         request.app.state.mobile_expiry_pipeline = pipeline
         return pipeline
@@ -135,7 +159,7 @@ async def create_mobile_expiry_scan(request: Request, session: AsyncSession) -> 
         )
     )
     await session.commit()
-    return _response(row)
+    return _response(row, pipeline_result=result)
 
 
 @patch("/mobile/expiry-scans/{scan_id:uuid}")

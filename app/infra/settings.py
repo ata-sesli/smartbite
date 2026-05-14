@@ -51,6 +51,22 @@ class Settings(BaseSettings):
     mobile_expiry_detector_imgsz: int = 1024
     mobile_expiry_max_candidates: int = 12
     mobile_expiry_crop_padding_px: int = 4
+    mobile_proposal_rescue_backend: str = "rapidocr_ppocrv5"
+    mobile_rapidocr_primary_enabled: bool = True
+    mobile_rapidocr_rescue_enabled: bool = True
+    mobile_rapidocr_ocr_version: str = "PP-OCRv5"
+    mobile_rapidocr_model_type: str = "mobile"
+    mobile_rapidocr_lang_type: str = "ch"
+    mobile_rapidocr_limit_side_len: int = 512
+    mobile_rapidocr_limit_type: str = "max"
+    mobile_rapidocr_max_candidates: int = 16
+    mobile_rapidocr_primary_max_rois_per_scan: int = 12
+    mobile_rapidocr_primary_max_boxes_accepted: int = 40
+    mobile_rapidocr_primary_timeout_seconds: float = 12.0
+    mobile_rapidocr_max_rois_per_scan: int = 1
+    mobile_rapidocr_max_boxes_accepted: int = 5
+    mobile_rapidocr_timeout_seconds: float = 0.75
+    mobile_rapidocr_min_confidence: float = 0.10
 
     # Expiry OCR lane: PP-OCRv5 text detection + configurable final recognition.
     text_detector_mode: str = "ensemble"
@@ -343,6 +359,76 @@ class Settings(BaseSettings):
     @classmethod
     def validate_mobile_expiry_crop_padding_px(cls, value: int) -> int:
         return max(0, int(value))
+
+    @field_validator("mobile_proposal_rescue_backend")
+    @classmethod
+    def validate_mobile_proposal_rescue_backend(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        valid = {"rapidocr_ppocrv5"}
+        if normalized not in valid:
+            raise ValueError(f"mobile_proposal_rescue_backend must be one of {sorted(valid)}")
+        return normalized
+
+    @field_validator("mobile_rapidocr_ocr_version")
+    @classmethod
+    def validate_mobile_rapidocr_ocr_version(cls, value: str) -> str:
+        normalized = value.strip() or "PP-OCRv5"
+        valid = {"PP-OCRv4", "PP-OCRv5"}
+        if normalized not in valid:
+            raise ValueError(f"mobile_rapidocr_ocr_version must be one of {sorted(valid)}")
+        return normalized
+
+    @field_validator("mobile_rapidocr_model_type")
+    @classmethod
+    def validate_mobile_rapidocr_model_type(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        valid = {"mobile", "server"}
+        if normalized not in valid:
+            raise ValueError(f"mobile_rapidocr_model_type must be one of {sorted(valid)}")
+        return normalized
+
+    @field_validator("mobile_rapidocr_lang_type")
+    @classmethod
+    def validate_mobile_rapidocr_lang_type(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        valid = {"ch", "en"}
+        if normalized not in valid:
+            raise ValueError(f"mobile_rapidocr_lang_type must be one of {sorted(valid)}")
+        return normalized
+
+    @field_validator("mobile_rapidocr_limit_type")
+    @classmethod
+    def validate_mobile_rapidocr_limit_type(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        valid = {"max", "min"}
+        if normalized not in valid:
+            raise ValueError(f"mobile_rapidocr_limit_type must be one of {sorted(valid)}")
+        return normalized
+
+    @field_validator("mobile_rapidocr_limit_side_len")
+    @classmethod
+    def validate_mobile_rapidocr_limit_side_len(cls, value: int) -> int:
+        return max(128, int(value))
+
+    @field_validator("mobile_rapidocr_max_candidates", "mobile_rapidocr_max_boxes_accepted", "mobile_rapidocr_primary_max_boxes_accepted")
+    @classmethod
+    def validate_mobile_rapidocr_positive_int(cls, value: int) -> int:
+        return max(1, int(value))
+
+    @field_validator("mobile_rapidocr_max_rois_per_scan", "mobile_rapidocr_primary_max_rois_per_scan")
+    @classmethod
+    def validate_mobile_rapidocr_max_rois(cls, value: int) -> int:
+        return max(0, int(value))
+
+    @field_validator("mobile_rapidocr_timeout_seconds", "mobile_rapidocr_primary_timeout_seconds")
+    @classmethod
+    def validate_mobile_rapidocr_timeout_seconds(cls, value: float) -> float:
+        return max(0.1, float(value))
+
+    @field_validator("mobile_rapidocr_min_confidence")
+    @classmethod
+    def validate_mobile_rapidocr_min_confidence(cls, value: float) -> float:
+        return max(0.0, min(float(value), 1.0))
 
     @field_validator("parser_min_candidate_confidence")
     @classmethod

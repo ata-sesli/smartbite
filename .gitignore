@@ -392,3 +392,4 @@ artifacts/
 .mplconfig
 test-images/
 models/smartbite_svtrv2_expdate_rec.zip
+models/craft/*.pth

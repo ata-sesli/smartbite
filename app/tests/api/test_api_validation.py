@@ -57,6 +57,10 @@ def test_mobile_expiry_scan_success_persists_image_and_detected_date(monkeypatch
             reason="DMY;rotation=original",
             detection_polygon_json=[[1.0, 2.0], [30.0, 2.0], [30.0, 12.0], [1.0, 12.0]],
             runtime_ms=12,
+            final_recognition_bbox_xyxy=[3, 4, 32, 14],
+            final_recognition_polygon_json=[[3.0, 4.0], [32.0, 4.0], [32.0, 14.0], [3.0, 14.0]],
+            final_crop_policy="recognition_bbox_tight",
+            final_crop_padding_px=3,
         )
     )
 
@@ -81,6 +85,9 @@ def test_mobile_expiry_scan_success_persists_image_and_detected_date(monkeypatch
     assert payload["corrected_expiry_date"] is None
     assert payload["raw_text"] == "23.07.2027"
     assert payload["recognition_confidence"] == 0.91
+    assert payload["final_recognition_bbox_xyxy"] == [3, 4, 32, 14]
+    assert payload["final_crop_policy"] == "recognition_bbox_tight"
+    assert payload["final_crop_padding_px"] == 3
     assert fake.calls == [image_bytes]
 
     row = asyncio.run(_get_mobile_scan_row(UUID(payload["id"])))
@@ -1075,6 +1082,93 @@ def test_test64_full_pipeline_review_loads_latest_plain_report(monkeypatch, tmp_
     assert payload["detector_config"]["craft_enabled"] is False
     assert payload["items"][0]["verdict"] == "recognition_fail"
     assert payload["items"][0]["detector_counts"]["ppocrv5_server_boxes"] == 2
+
+
+def test_test64_full_pipeline_results_loads_latest_mobile_upload_report(
+    monkeypatch, tmp_path: Path
+) -> None:
+    root = tmp_path / "onnx_parity"
+    older_dir = root / "test64_mobile_upload_20260509T082438Z"
+    run_dir = root / "test64_mobile_upload_20260510T082438Z"
+    older_dir.mkdir(parents=True)
+    run_dir.mkdir(parents=True)
+    (older_dir / "mobile_test64_upload_report.json").write_text(
+        json.dumps({"summary": {"total": 0}, "rows": []}),
+        encoding="utf-8",
+    )
+    (run_dir / "mobile_test64_upload_report.json").write_text(
+        json.dumps(
+            {
+                "base_url": "http://localhost:8005",
+                "endpoint": "http://localhost:8005/mobile/expiry-scans",
+                "created_at": "2026-05-13T22:13:08",
+                "summary": {
+                    "total": 2,
+                    "http_201": 2,
+                    "parsed_success": 1,
+                    "manual_review_required": 1,
+                    "exact_matches": 1,
+                    "wrong_parsed_dates": 0,
+                    "accuracy": 0.5,
+                    "latency": {"avg_ms": 1234.5, "p90_ms": 2000.0},
+                },
+                "rows": [
+                    {
+                        "filename": "ok.jpg",
+                        "http_status": 201,
+                        "latency_ms": 1000,
+                        "expected_date": "2026-10",
+                        "expected_precision": "month",
+                        "detected_expiry_date": "2026-10-31",
+                        "exact_match": True,
+                        "response_status": "parsed_success",
+                        "raw_text": "10/2026",
+                        "normalized_text": "10/2026",
+                        "recognition_confidence": 0.91,
+                        "detector_confidence": 0.82,
+                        "final_recognition_bbox_xyxy": [10, 20, 110, 34],
+                        "final_recognition_polygon_json": [[10, 20], [110, 20], [110, 34], [10, 34]],
+                        "final_crop_policy": "recognition_bbox_tight",
+                        "final_crop_padding_px": 3,
+                        "reason": "selected_MM/YYYY",
+                    },
+                    {
+                        "filename": "review.jpg",
+                        "http_status": 201,
+                        "latency_ms": 1500,
+                        "expected_date": "2027-01-01",
+                        "expected_precision": "day",
+                        "detected_expiry_date": None,
+                        "exact_match": False,
+                        "response_status": "manual_review_required",
+                        "raw_text": "",
+                        "normalized_text": "",
+                        "reason": "no valid date parsed",
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("app.domain.services.TEST64_MOBILE_UPLOAD_ARTIFACTS_DIR", root)
+
+    app = create_app()
+    with TestClient(app=app) as client:
+        response = client.get("/test64/full-pipeline-results")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["run_id"] == run_dir.name
+    assert payload["summary"]["exact_matches"] == 1
+    assert payload["latency"]["avg_ms"] == 1234.5
+    assert payload["items"][0]["filename"] == "ok.jpg"
+    assert payload["items"][0]["image_url"] == "/test64/images/ok.jpg"
+    assert payload["items"][0]["verdict"] == "correct_match"
+    assert payload["items"][0]["expected_precision"] == "month"
+    assert payload["items"][0]["predicted_date"] == "2026-10-31"
+    assert payload["items"][0]["final_recognition_bbox_xyxy"] == [10, 20, 110, 34]
+    assert payload["items"][0]["final_crop_policy"] == "recognition_bbox_tight"
+    assert payload["items"][1]["verdict"] == "manual_review"
 
 
 def test_general_text_endpoint_is_not_registered() -> None:

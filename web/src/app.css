@@ -276,6 +276,68 @@ h3 {
   white-space: nowrap;
 }
 
+.pipeline-outcome-correct_match {
+  background: var(--success-soft);
+  border-color: #8ec5ad;
+}
+
+.pipeline-outcome-wrong_date,
+.pipeline-outcome-http_error,
+.pipeline-outcome-failed {
+  background: var(--danger-soft);
+  border-color: #ef9a92;
+  color: var(--danger);
+}
+
+.pipeline-outcome-manual_review {
+  background: #fff6db;
+  border-color: #e4c46b;
+  color: #806000;
+}
+
+.full-pipeline-meta {
+  margin-top: -0.35rem;
+}
+
+.full-pipeline-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.full-pipeline-filters button {
+  width: auto;
+  background: #ffffff;
+  color: var(--secondary);
+  border-color: var(--line);
+  box-shadow: none;
+}
+
+.full-pipeline-filters button.active {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  border-color: var(--accent);
+}
+
+.full-pipeline-raw-row {
+  background: #ffffff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.75rem;
+}
+
+.full-pipeline-raw-row summary {
+  cursor: pointer;
+  color: var(--accent-strong);
+  font-weight: 800;
+}
+
+.full-pipeline-raw-row pre {
+  max-height: 360px;
+  overflow: auto;
+  margin: 0.75rem 0 0;
+}
+
 .recognition-crop-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.1fr) minmax(260px, 0.9fr);
@@ -450,6 +512,13 @@ h3 {
 .detection-review-overlay .best-audit-box {
   fill: rgba(22, 163, 74, 0.08);
   stroke: #16a34a;
+}
+
+.detection-review-overlay .final-recognition-box {
+  fill: rgba(255, 204, 0, 0.12);
+  stroke: #ffcc00;
+  stroke-width: 2.5;
+  stroke-dasharray: 10 5;
 }
 
 .detection-review-image figcaption {
