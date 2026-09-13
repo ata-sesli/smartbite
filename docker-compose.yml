@@ -1,0 +1,64 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: smartbite
+      POSTGRES_USER: smartbite
+      POSTGRES_PASSWORD: smartbite
+    ports:
+      - "${SMARTBITE_POSTGRES_PORT:-15432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "${SMARTBITE_REDIS_PORT:-16379}:6379"
+
+  api:
+    build:
+      context: .
+      args:
+        SMARTBITE_INSTALL_AI: "1"
+    command: /bin/sh /app/app/scripts/start_api_with_migrations.sh
+    environment:
+      SMARTBITE_ONE_SHOT_TIMEOUT_SECONDS: "45"
+      SMARTBITE_DATABASE_URL: postgresql+asyncpg://smartbite:smartbite@postgres:5432/smartbite
+      SMARTBITE_REDIS_URL: redis://redis:6379/0
+      SMARTBITE_STORAGE_ROOT: /app/data/storage
+      SMARTBITE_MOBILE_EXPIRY_DETECTOR_BACKEND: ultralytics
+      SMARTBITE_SVTRV2_REC_BACKEND: paddle
+      SMARTBITE_SVTRV2_DEVICE_MODE: cpu
+      PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK: "True"
+      SMARTBITE_MIGRATION_MAX_RETRIES: 30
+      SMARTBITE_MIGRATION_RETRY_SECONDS: 2
+    volumes:
+      - .:/app
+    depends_on:
+      - postgres
+      - redis
+    ports:
+      - "${SMARTBITE_API_PORT:-8005}:${SMARTBITE_API_PORT:-8005}"
+
+  worker:
+    build:
+      context: .
+      args:
+        SMARTBITE_INSTALL_AI: "1"
+    command: smartbite-worker
+    environment:
+      SMARTBITE_DATABASE_URL: postgresql+asyncpg://smartbite:smartbite@postgres:5432/smartbite
+      SMARTBITE_REDIS_URL: redis://redis:6379/0
+      SMARTBITE_STORAGE_ROOT: /app/data/storage
+      SMARTBITE_MOBILE_EXPIRY_DETECTOR_BACKEND: ultralytics
+      SMARTBITE_SVTRV2_REC_BACKEND: paddle
+      SMARTBITE_SVTRV2_DEVICE_MODE: cpu
+      PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK: "True"
+    volumes:
+      - .:/app
+    depends_on:
+      - postgres
+      - redis
+
+volumes:
+  postgres_data:
